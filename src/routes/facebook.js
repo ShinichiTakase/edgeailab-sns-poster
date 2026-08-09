@@ -1,13 +1,51 @@
 const express = require("express");
 const crypto = require("crypto");
+const fs = require("fs");
+const path = require("path");
 const { savePlatformTokens, deletePlatformTokensByUserId } = require("../lib/tokenStore");
 const pkceStore = require("../lib/pkceStore");
 
 const router = express.Router();
 
+// x-refresh.log と同様、json/ 配下（volumeマウントでコンテナ再ビルド後も残る）に
+// 標準出力とは別で永続化する。docker logsのローテーションで消える前の記録用。
+const LOG_FILE = path.join(__dirname, "..", "..", "json", "facebook.log");
+
+function writeLogFile(level, args) {
+  const message = args
+    .map((a) => (a instanceof Error ? a.stack : typeof a === "object" ? JSON.stringify(a) : a))
+    .join(" ");
+  const line = `${new Date().toISOString()} [${level}] ${message}\n`;
+  try {
+    fs.appendFileSync(LOG_FILE, line);
+  } catch (err) {
+    console.error("[facebook] failed to write log file:", err);
+  }
+}
+
+function logInfo(...args) {
+  console.info(...args);
+  writeLogFile("info", args);
+}
+
+function logWarn(...args) {
+  console.warn(...args);
+  writeLogFile("warn", args);
+}
+
+function logError(...args) {
+  console.error(...args);
+  writeLogFile("error", args);
+}
+
 const SUCCESS_HTML = `<!doctype html>
-<html lang="ja"><head><meta charset="utf-8"><title>連携完了</title></head>
-<body><p>Facebookページの連携が完了しました。このページを閉じてください。</p></body></html>`;
+<html lang="ja"><head><meta charset="utf-8"><title>連携完了</title>
+<style>
+  body { display: flex; justify-content: center; margin: 0; padding-top: 15vh; font-family: sans-serif; }
+  .box { border: 2px solid #333; border-radius: 8px; padding: 2rem 3rem; text-align: center; }
+</style>
+</head>
+<body><div class="box"><p>Facebookページの連携が完了しました。このページを閉じてください。</p></div></body></html>`;
 
 const ERROR_HTML = `<!doctype html>
 <html lang="ja"><head><meta charset="utf-8"><title>エラー</title></head>
@@ -22,7 +60,7 @@ const GRAPH_URL = `https://graph.facebook.com/${GRAPH_API_VERSION}`;
 router.get("/oauth/facebook/start", (req, res) => {
   const { slug } = req.query;
   if (!slug) {
-    console.error("[facebook/start] missing slug query param");
+    logError("[facebook/start] missing slug query param");
     return res.status(400).send(ERROR_HTML);
   }
 
@@ -42,17 +80,17 @@ router.get("/oauth/facebook/start", (req, res) => {
 router.get("/oauth/facebook/callback", async (req, res) => {
   const { code, state, error, error_description: errorDescription } = req.query;
   if (error) {
-    console.error(`[facebook/callback] provider returned error: ${error} ${errorDescription || ""}`);
+    logError(`[facebook/callback] provider returned error: ${error} ${errorDescription || ""}`);
     return res.status(400).send(ERROR_HTML);
   }
   if (!code || !state) {
-    console.error("[facebook/callback] missing code or state query param");
+    logError("[facebook/callback] missing code or state query param");
     return res.status(400).send(ERROR_HTML);
   }
 
   const entry = pkceStore.take(state);
   if (!entry) {
-    console.error("[facebook/callback] state mismatch or expired");
+    logError("[facebook/callback] state mismatch or expired");
     return res.status(400).send(ERROR_HTML);
   }
   const { slug } = entry;
@@ -64,13 +102,13 @@ router.get("/oauth/facebook/callback", async (req, res) => {
     const pages = await fetchManagedPages(longLived.access_token);
 
     if (pages.length === 0) {
-      console.error(`[facebook/callback] no managed pages for slug=${slug}`);
+      logError(`[facebook/callback] no managed pages for slug=${slug}`);
       return res.status(400).send(ERROR_HTML);
     }
 
     const verifiedPages = await verifyPages(pages);
     if (verifiedPages.length === 0) {
-      console.error(`[facebook/callback] no pages passed verification for slug=${slug}`);
+      logError(`[facebook/callback] no pages passed verification for slug=${slug}`);
       return res.status(400).send(ERROR_HTML);
     }
 
@@ -81,12 +119,12 @@ router.get("/oauth/facebook/callback", async (req, res) => {
       updated_at: now.toISOString(),
     });
 
-    console.info(
+    logInfo(
       `[facebook/callback] linked slug=${slug} pages=${verifiedPages.map((p) => p.pageName).join(", ")}`
     );
     return res.send(SUCCESS_HTML);
   } catch (err) {
-    console.error("[facebook/callback] failed:", err);
+    logError("[facebook/callback] failed:", err);
     return res.status(500).send(ERROR_HTML);
   }
 });
@@ -105,7 +143,7 @@ router.post(
       const userId = payload.user_id;
 
       const affectedSlugs = deletePlatformTokensByUserId("facebook", userId);
-      console.info(
+      logInfo(
         `[facebook/data-deletion] user_id=${userId} removed from slugs=[${affectedSlugs.join(", ")}]`
       );
 
@@ -115,7 +153,7 @@ router.post(
         confirmation_code: confirmationCode,
       });
     } catch (err) {
-      console.error("[facebook/data-deletion] failed:", err);
+      logError("[facebook/data-deletion] failed:", err);
       res.status(400).json({ error: "signed_request verification failed" });
     }
   }
@@ -214,7 +252,7 @@ async function verifyPages(pages) {
         pageAccessToken: page.access_token,
       });
     } else {
-      console.warn(`[facebook/callback] page verification failed for ${page.id}:`, json);
+      logWarn(`[facebook/callback] page verification failed for ${page.id}:`, json);
     }
   }
   return verified;
