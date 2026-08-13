@@ -1,4 +1,5 @@
 ## 運用環境
+回答は、すべて日本語で行う
 このプロジェクト（sns-poster）は本番環境。アプリコードはこのディレクトリにあるが、
 実際のコンテナ定義（VIRTUAL_HOST/nginx-proxy連携含む）は
 `/opt/project/deploy/xserver-vps/docker-compose.yml` に集約されている
@@ -16,3 +17,20 @@
 ## データ永続化
 `json/client_tokens.json` はクライアントごとのSNSトークン置き場。
 クライアント数が増えたらDB移行を検討する前提の暫定実装（[src/lib/tokenStore.js](src/lib/tokenStore.js)参照）。
+
+## Instagramトークンの定期リフレッシュ（cron）
+`sns-poster-instagram-refresh`（[src/scripts/refreshInstagramTokens.js](src/scripts/refreshInstagramTokens.js)）は
+常駐サービスではなく、cronからの手動起動を想定した`profiles: manual`サービス。
+実際のcrontab登録は手動実施（コード側の対応は不要）。登録例：
+
+```
+0 3 * * * cd /opt/project/deploy/xserver-vps && docker compose run --rm sns-poster-instagram-refresh
+```
+
+## Threadsトークンの定期リフレッシュ（cron）
+`sns-poster-threads-refresh`（[src/scripts/refreshThreadsTokens.js](src/scripts/refreshThreadsTokens.js)）も同様に
+`profiles: manual`サービス。実際のcrontab登録は手動実施（コード側の対応は不要）。登録例：
+
+```
+0 3 * * * cd /opt/project/deploy/xserver-vps && docker compose run --rm sns-poster-threads-refresh >> /var/log/threads-refresh.log 2>&1
+```

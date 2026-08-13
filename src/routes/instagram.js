@@ -8,9 +8,9 @@ const { requireAuth } = require("../middleware/requireAuth");
 
 const router = express.Router();
 
-// x-refresh.log と同様、json/ 配下（volumeマウントでコンテナ再ビルド後も残る）に
+// facebook.js と同様、json/ 配下（volumeマウントでコンテナ再ビルド後も残る）に
 // 標準出力とは別で永続化する。docker logsのローテーションで消える前の記録用。
-const LOG_FILE = path.join(__dirname, "..", "..", "json", "facebook.log");
+const LOG_FILE = path.join(__dirname, "..", "..", "json", "instagram.log");
 
 function writeLogFile(level, args) {
   const message = args
@@ -20,7 +20,7 @@ function writeLogFile(level, args) {
   try {
     fs.appendFileSync(LOG_FILE, line);
   } catch (err) {
-    console.error("[facebook] failed to write log file:", err);
+    console.error("[instagram] failed to write log file:", err);
   }
 }
 
@@ -46,48 +46,63 @@ const SUCCESS_HTML = `<!doctype html>
   .box { border: 2px solid #333; border-radius: 8px; padding: 2rem 3rem; text-align: center; }
 </style>
 </head>
-<body><div class="box"><p>Facebookページの連携が完了しました。このページを閉じてください。</p></div></body></html>`;
+<body><div class="box"><p>Instagramアカウントの連携が完了しました。このページを閉じてください。</p></div></body></html>`;
 
 const ERROR_HTML = `<!doctype html>
 <html lang="ja"><head><meta charset="utf-8"><title>エラー</title></head>
 <body><p>エラーが発生しました。担当者にご連絡ください。</p></body></html>`;
 
+// facebook.js の GRAPH_API_VERSION と揃える。
 const GRAPH_API_VERSION = "v26.0";
-const AUTHORIZE_URL = `https://www.facebook.com/${GRAPH_API_VERSION}/dialog/oauth`;
-const GRAPH_URL = `https://graph.facebook.com/${GRAPH_API_VERSION}`;
+const AUTHORIZE_URL = "https://www.instagram.com/oauth/authorize";
+const SHORT_LIVED_TOKEN_URL = "https://api.instagram.com/oauth/access_token";
+const LONG_LIVED_TOKEN_URL = "https://graph.instagram.com/access_token";
+const GRAPH_URL = `https://graph.instagram.com/${GRAPH_API_VERSION}`;
 
 // 動作確認・実運用の両方でこのエンドポイントから開始する。
-// state を発行してslug（クライアント識別子）と紐付け、Xの実装と同じ方式でコールバックへ受け渡す。
-router.get("/oauth/facebook/start", requireAuth, (req, res) => {
+// state を発行してslug（クライアント識別子）と紐付け、Facebook/Threadsの実装と同じ方式でコールバックへ受け渡す。
+router.get("/oauth/instagram/start", requireAuth, (req, res) => {
   const slug = req.customer.id;
 
   const state = crypto.randomBytes(24).toString("hex");
   pkceStore.put(state, { slug });
 
   const url = new URL(AUTHORIZE_URL);
-  url.searchParams.set("client_id", process.env.FACEBOOK_APP_ID);
-  url.searchParams.set("redirect_uri", process.env.FACEBOOK_REDIRECT_URI);
-  url.searchParams.set("config_id", process.env.FACEBOOK_CONFIG_ID);
+  url.searchParams.set("force_reauth", "true");
+  url.searchParams.set("client_id", process.env.INSTAGRAM_APP_ID);
+  url.searchParams.set("redirect_uri", process.env.INSTAGRAM_REDIRECT_URI);
   url.searchParams.set("response_type", "code");
   url.searchParams.set("state", state);
+  // content_publish はユースケースの「必須権限」バンドルに自動で含まれないため、
+  // 明示的に指定しないと投稿権限が付与されない点に注意。
+  url.searchParams.set(
+    "scope",
+    [
+      "instagram_business_basic",
+      "instagram_business_content_publish",
+      "instagram_business_manage_comments",
+      "instagram_business_manage_messages",
+      "instagram_business_manage_insights",
+    ].join(",")
+  );
 
   res.redirect(url.toString());
 });
 
-router.get("/oauth/facebook/callback", async (req, res) => {
+router.get("/oauth/instagram/callback", async (req, res) => {
   const { code, state, error, error_description: errorDescription } = req.query;
   if (error) {
-    logError(`[facebook/callback] provider returned error: ${error} ${errorDescription || ""}`);
+    logError(`[instagram/callback] provider returned error: ${error} ${errorDescription || ""}`);
     return res.status(400).send(ERROR_HTML);
   }
   if (!code || !state) {
-    logError("[facebook/callback] missing code or state query param");
+    logError("[instagram/callback] missing code or state query param");
     return res.status(400).send(ERROR_HTML);
   }
 
   const entry = pkceStore.take(state);
   if (!entry) {
-    logError("[facebook/callback] state mismatch or expired");
+    logError("[instagram/callback] state mismatch or expired");
     return res.status(400).send(ERROR_HTML);
   }
   const { slug } = entry;
@@ -95,39 +110,30 @@ router.get("/oauth/facebook/callback", async (req, res) => {
   try {
     const shortLived = await exchangeShortLivedToken(code);
     const longLived = await exchangeLongLivedToken(shortLived.access_token);
-    const userId = await fetchUserId(longLived.access_token);
-    const pages = await fetchManagedPages(longLived.access_token);
-
-    if (pages.length === 0) {
-      logError(`[facebook/callback] no managed pages for slug=${slug}`);
-      return res.status(400).send(ERROR_HTML);
-    }
-
-    const verifiedPages = await verifyPages(pages);
-    if (verifiedPages.length === 0) {
-      logError(`[facebook/callback] no pages passed verification for slug=${slug}`);
-      return res.status(400).send(ERROR_HTML);
-    }
+    // Facebook/ThreadsのPage検証と同等の位置づけとして、プロフィール取得の成功を
+    // 読み取り専用API疎通確認とみなす。
+    const profile = await fetchProfile(longLived.access_token);
 
     const now = new Date();
-    savePlatformTokens(slug, "facebook", {
-      user_id: userId,
-      pages: verifiedPages,
+    savePlatformTokens(slug, "instagram", {
+      user_id: profile.id,
+      username: profile.username,
+      access_token: longLived.access_token,
+      token_expires_at: new Date(now.getTime() + longLived.expires_in * 1000).toISOString(),
+      permissions: shortLived.permissions,
       updated_at: now.toISOString(),
     });
 
-    logInfo(
-      `[facebook/callback] linked slug=${slug} pages=${verifiedPages.map((p) => p.pageName).join(", ")}`
-    );
+    logInfo(`[instagram/callback] linked slug=${slug} username=${profile.username}`);
     return res.send(SUCCESS_HTML);
   } catch (err) {
-    logError("[facebook/callback] failed:", err);
+    logError("[instagram/callback] failed:", err);
     return res.status(500).send(ERROR_HTML);
   }
 });
 
 router.post(
-  "/api/facebook/data-deletion-callback",
+  "/api/instagram/data-deletion-callback",
   express.urlencoded({ extended: false }),
   (req, res) => {
     try {
@@ -136,25 +142,33 @@ router.post(
         return res.status(400).json({ error: "signed_request is missing" });
       }
 
-      const payload = parseSignedRequest(signedRequest, process.env.FACEBOOK_APP_SECRET);
+      const payload = parseSignedRequest(signedRequest, process.env.INSTAGRAM_APP_SECRET);
       const userId = payload.user_id;
 
-      const affectedSlugs = deletePlatformTokensByUserId("facebook", userId);
+      const affectedSlugs = deletePlatformTokensByUserId("instagram", userId);
       logInfo(
-        `[facebook/data-deletion] user_id=${userId} removed from slugs=[${affectedSlugs.join(", ")}]`
+        `[instagram/data-deletion] user_id=${userId} removed from slugs=[${affectedSlugs.join(", ")}]`
       );
 
       const confirmationCode = crypto.randomBytes(8).toString("hex");
       res.json({
-        url: `https://edgeailab.net/facebook/data-deletion?id=${confirmationCode}`,
+        url: `https://edgeailab.net/instagram/data-deletion?id=${confirmationCode}`,
         confirmation_code: confirmationCode,
       });
     } catch (err) {
-      logError("[facebook/data-deletion] failed:", err);
+      logError("[instagram/data-deletion] failed:", err);
       res.status(400).json({ error: "signed_request verification failed" });
     }
   }
 );
+
+// Instagram Business LoginのDeauthorization callbackがsigned_requestを送ってくるか
+// JSON bodyかは未確認（2026-08-11時点）。まずは受信内容をそのままログに残す最小実装とし、
+// 実際の呼び出しを確認した上で必要ならparseSignedRequestを適用する。
+router.post("/oauth/instagram/deauthorize", express.urlencoded({ extended: false }), (req, res) => {
+  logInfo("[instagram/deauthorize] received:", req.body);
+  res.sendStatus(200);
+});
 
 function parseSignedRequest(signedRequest, appSecret) {
   const [encodedSig, encodedPayload] = signedRequest.split(".");
@@ -175,14 +189,22 @@ function parseSignedRequest(signedRequest, appSecret) {
   return JSON.parse(decoded);
 }
 
+// code→短命トークンの交換はmultipart/form-data指定だが、URLSearchParamsをbodyに渡すと
+// fetchがContent-Type: application/x-www-form-urlencodedを自動付与し、これでも受理される
+// （threads.jsの実装と同じ方式）。multipart必須のエラーが出た場合はFormDataに切り替えること。
 async function exchangeShortLivedToken(code) {
-  const url = new URL(`${GRAPH_URL}/oauth/access_token`);
-  url.searchParams.set("client_id", process.env.FACEBOOK_APP_ID);
-  url.searchParams.set("client_secret", process.env.FACEBOOK_APP_SECRET);
-  url.searchParams.set("redirect_uri", process.env.FACEBOOK_REDIRECT_URI);
-  url.searchParams.set("code", code);
+  const params = new URLSearchParams({
+    client_id: process.env.INSTAGRAM_APP_ID,
+    client_secret: process.env.INSTAGRAM_APP_SECRET,
+    grant_type: "authorization_code",
+    redirect_uri: process.env.INSTAGRAM_REDIRECT_URI,
+    code,
+  });
 
-  const res = await fetch(url.toString());
+  const res = await fetch(SHORT_LIVED_TOKEN_URL, {
+    method: "POST",
+    body: params,
+  });
   const json = await res.json();
   if (!res.ok || json.error || !json.access_token) {
     throw new Error(`short-lived token exchange failed: ${JSON.stringify(json)}`);
@@ -191,11 +213,10 @@ async function exchangeShortLivedToken(code) {
 }
 
 async function exchangeLongLivedToken(shortLivedToken) {
-  const url = new URL(`${GRAPH_URL}/oauth/access_token`);
-  url.searchParams.set("grant_type", "fb_exchange_token");
-  url.searchParams.set("client_id", process.env.FACEBOOK_APP_ID);
-  url.searchParams.set("client_secret", process.env.FACEBOOK_APP_SECRET);
-  url.searchParams.set("fb_exchange_token", shortLivedToken);
+  const url = new URL(LONG_LIVED_TOKEN_URL);
+  url.searchParams.set("grant_type", "ig_exchange_token");
+  url.searchParams.set("client_secret", process.env.INSTAGRAM_APP_SECRET);
+  url.searchParams.set("access_token", shortLivedToken);
 
   const res = await fetch(url.toString());
   const json = await res.json();
@@ -205,54 +226,17 @@ async function exchangeLongLivedToken(shortLivedToken) {
   return json;
 }
 
-async function fetchUserId(accessToken) {
+async function fetchProfile(accessToken) {
   const url = new URL(`${GRAPH_URL}/me`);
-  url.searchParams.set("fields", "id");
+  url.searchParams.set("fields", "id,username");
   url.searchParams.set("access_token", accessToken);
 
   const res = await fetch(url.toString());
   const json = await res.json();
-  if (!res.ok || json.error || !json.id) {
-    throw new Error(`user id fetch failed: ${JSON.stringify(json)}`);
+  if (!res.ok || json.error || !json.username) {
+    throw new Error(`profile fetch failed: ${JSON.stringify(json)}`);
   }
-  return json.id;
-}
-
-async function fetchManagedPages(accessToken) {
-  const url = new URL(`${GRAPH_URL}/me/accounts`);
-  url.searchParams.set("access_token", accessToken);
-
-  const res = await fetch(url.toString());
-  const json = await res.json();
-  if (!res.ok || json.error || !json.data) {
-    throw new Error(`managed pages fetch failed: ${JSON.stringify(json)}`);
-  }
-  return json.data;
-}
-
-// 投稿前の運用標準（Threads/Xと同様）：取得したトークンで読み取り専用API呼び出しを行い、
-// 検証に失敗したページは保存対象から除外する。
-async function verifyPages(pages) {
-  const verified = [];
-  for (const page of pages) {
-    const url = new URL(`${GRAPH_URL}/${page.id}`);
-    url.searchParams.set("fields", "name");
-    url.searchParams.set("access_token", page.access_token);
-
-    const res = await fetch(url.toString());
-    const json = await res.json();
-
-    if (res.ok && !json.error && json.name) {
-      verified.push({
-        pageId: page.id,
-        pageName: json.name,
-        pageAccessToken: page.access_token,
-      });
-    } else {
-      logWarn(`[facebook/callback] page verification failed for ${page.id}:`, json);
-    }
-  }
-  return verified;
+  return json;
 }
 
 module.exports = router;

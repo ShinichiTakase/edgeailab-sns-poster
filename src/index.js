@@ -5,11 +5,17 @@ const express = require("express");
 const threadsRoutes = require("./routes/threads");
 const xRoutes = require("./routes/x");
 const facebookRoutes = require("./routes/facebook");
+const instagramRoutes = require("./routes/instagram");
+const authRoutes = require("./routes/auth");
+const billingRoutes = require("./routes/billing");
 
 const app = express();
 app.use(threadsRoutes);
 app.use(xRoutes);
 app.use(facebookRoutes);
+app.use(instagramRoutes);
+app.use(authRoutes);
+app.use(billingRoutes);
 
 const port = process.env.PORT || 3000;
 app.listen(port, () => {

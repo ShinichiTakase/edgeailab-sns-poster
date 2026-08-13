@@ -2,6 +2,7 @@ const express = require("express");
 const crypto = require("crypto");
 const { savePlatformTokens } = require("../lib/tokenStore");
 const pkceStore = require("../lib/pkceStore");
+const { requireAuth } = require("../middleware/requireAuth");
 
 const router = express.Router();
 
@@ -18,12 +19,8 @@ const TOKEN_URL = "https://api.x.com/2/oauth2/token";
 const USERS_ME_URL = "https://api.x.com/2/users/me";
 const SCOPE = "tweet.read tweet.write users.read offline.access";
 
-router.get("/oauth/x/authorize", (req, res) => {
-  const { slug } = req.query;
-  if (!slug) {
-    console.error("[x/authorize] missing slug query param");
-    return res.status(400).send(ERROR_HTML);
-  }
+router.get("/oauth/x/authorize", requireAuth, (req, res) => {
+  const slug = req.customer.id;
 
   const codeVerifier = crypto.randomBytes(64).toString("base64url");
   const codeChallenge = crypto.createHash("sha256").update(codeVerifier).digest("base64url");
