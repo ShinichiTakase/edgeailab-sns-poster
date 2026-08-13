@@ -22,6 +22,17 @@ function isValidEmail(email) {
   return typeof email === "string" && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim());
 }
 
+// 半角英字・数字・記号をすべて含む8文字以上
+function isValidPassword(password) {
+  return (
+    typeof password === "string" &&
+    password.length >= 8 &&
+    /[A-Za-z]/.test(password) &&
+    /[0-9]/.test(password) &&
+    /[^A-Za-z0-9]/.test(password)
+  );
+}
+
 function buildVerifyUrl(token) {
   const base = process.env.APP_BASE_URL || "https://edgeailab.net";
   return `${base}/api/auth/verify?token=${encodeURIComponent(token)}`;
@@ -56,7 +67,7 @@ router.post("/api/auth/signup", express.json(), async (req, res) => {
   if (!isValidEmail(email)) {
     return res.status(400).json({ error: "invalid_email" });
   }
-  if (typeof password !== "string" || password.length < 8) {
+  if (!isValidPassword(password)) {
     return res.status(400).json({ error: "invalid_password" });
   }
   if (typeof contactName !== "string" || !contactName.trim()) {
