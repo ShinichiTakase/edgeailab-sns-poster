@@ -1,6 +1,10 @@
 // microCMS の customers スキーマ（サインアップ/認証/課金用）への読み書き。
 // 108teaworks/next-app/lib/microcmsCustomers.ts のREST呼び出しパターンをCommonJSへ移植したもの。
-// customersのmicroCMSレコードidをそのままSNS連携（json/client_tokens.json）のslugとして流用する。
+// customers は microCMS無料プランの5スキーマ上限に対応するため固定のトップレベル項目
+//（slug/companyName/contactName/status/plan等）を持ち、認証情報（email/password_hash）は
+// users 繰り返しフィールドにネストする設計。slugはコード側で自動生成し、
+// json/client_tokens.json のキーとして流用する。
+const crypto = require("crypto");
 
 function getBaseUrl() {
   const domain = process.env.MICROCMS_SERVICE_DOMAIN;
@@ -36,7 +40,7 @@ async function microcmsFetch(pathAndQuery, options = {}) {
 /** メールアドレスで顧客レコードを検索する（存在しなければnull） */
 async function getCustomerByEmail(email) {
   const res = await microcmsFetch(
-    `/customers?filters=${encodeURIComponent(`email[equals]${escFilterValue(email.trim())}`)}&limit=1`
+    `/customers?filters=email[equals]${escFilterValue(email.trim())}&limit=1`
   );
   if (!res.ok) {
     const text = await res.text().catch(() => "");
@@ -64,7 +68,7 @@ async function getCustomerById(id) {
 
 async function getCustomerByVerificationToken(token) {
   const res = await microcmsFetch(
-    `/customers?filters=${encodeURIComponent(`verification_token[equals]${escFilterValue(token)}`)}&limit=1`
+    `/customers?filters=verification_token[equals]${escFilterValue(token)}&limit=1`
   );
   if (!res.ok) {
     const text = await res.text().catch(() => "");
@@ -77,24 +81,37 @@ async function getCustomerByVerificationToken(token) {
   return contents[0] || null;
 }
 
+// plan は内部的に basic/standard/advanced（小文字）で扱うが、
+// customers.plan の選択肢定義は先頭大文字（Basic/Standard/Advanced）。
+function toPlanChoice(plan) {
+  return plan.charAt(0).toUpperCase() + plan.slice(1);
+}
+
 /**
  * 新規顧客レコードを作成する。
+ * password_hash 等の認証情報は users 繰り返しフィールドにネストする
+ *（customers トップレベルには存在しないため）。
+ * status/plan はセレクト項目のため配列形式で送信する。
  * @returns 作成されたレコード（idを含む）
  */
-async function createCustomer({ email, passwordHash, plan, verificationToken, verificationTokenExpiresAt }) {
+async function createCustomer({ email, passwordHash, plan, contactName, companyName }) {
   const res = await microcmsFetch(`/customers`, {
     method: "POST",
     body: JSON.stringify({
+      slug: crypto.randomUUID(),
       email: email.trim(),
-      password_hash: passwordHash,
-      plan,
-      is_verified: false,
-      verification_token: verificationToken,
-      verification_token_expires_at: verificationTokenExpiresAt,
-      trial_ends_at: "",
-      trial_reminder_sent: false,
-      stripe_customer_id: "",
-      stripe_subscription_status: "",
+      contactName: contactName.trim(),
+      companyName: (companyName || "").trim(),
+      status: ["trial"],
+      plan: [toPlanChoice(plan)],
+      users: [
+        {
+          fieldId: "users",
+          user_id: crypto.randomUUID(),
+          email: email.trim(),
+          password_hash: passwordHash,
+        },
+      ],
     }),
   });
   if (!res.ok) {

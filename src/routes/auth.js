@@ -52,12 +52,15 @@ router.post("/api/auth/check-email", express.json(), async (req, res) => {
 });
 
 router.post("/api/auth/signup", express.json(), async (req, res) => {
-  const { email, password, plan } = req.body || {};
+  const { email, password, plan, contactName, companyName } = req.body || {};
   if (!isValidEmail(email)) {
     return res.status(400).json({ error: "invalid_email" });
   }
   if (typeof password !== "string" || password.length < 8) {
     return res.status(400).json({ error: "invalid_password" });
+  }
+  if (typeof contactName !== "string" || !contactName.trim()) {
+    return res.status(400).json({ error: "invalid_contact_name" });
   }
   const normalizedPlan = VALID_PLANS.includes(plan) ? plan : "standard";
 
@@ -68,16 +71,18 @@ router.post("/api/auth/signup", express.json(), async (req, res) => {
     }
 
     const passwordHash = await bcrypt.hash(password, BCRYPT_ROUNDS);
-    const verificationToken = crypto.randomBytes(32).toString("hex");
-    const verificationTokenExpiresAt = new Date(Date.now() + VERIFICATION_TOKEN_TTL_MS).toISOString();
 
     const customer = await customerStore.createCustomer({
       email,
       passwordHash,
       plan: normalizedPlan,
-      verificationToken,
-      verificationTokenExpiresAt,
+      contactName,
+      companyName,
     });
+
+    // TODO: customers スキーマに verification_token 等の項目がないため、
+    // このリンクは現状クリックしても認証できない（別途方式を要決定）。
+    const verificationToken = crypto.randomBytes(32).toString("hex");
 
     const mailResult = await sendCustomerMail({
       toEmail: customer.email,
@@ -183,7 +188,8 @@ router.post("/api/auth/login", express.json(), async (req, res) => {
     if (!customer) {
       return res.status(401).json({ error: "invalid_credentials" });
     }
-    const match = await bcrypt.compare(password, customer.password_hash || "");
+    const passwordHash = customer.users?.[0]?.password_hash || "";
+    const match = await bcrypt.compare(password, passwordHash);
     if (!match) {
       return res.status(401).json({ error: "invalid_credentials" });
     }
