@@ -41,10 +41,10 @@ function buildVerifyUrl(token) {
 function safeCustomer(customer) {
   return {
     email: customer.email,
-    plan: customer.plan,
-    isVerified: Boolean(customer.is_verified),
-    trialEndsAt: customer.trial_ends_at || null,
-    stripeSubscriptionStatus: customer.stripe_subscription_status || null,
+    plan: Array.isArray(customer.plan) ? customer.plan[0] || null : customer.plan || null,
+    isVerified: Boolean(customer.isVerified),
+    trialEndsAt: customer.trialEndsAt || null,
+    status: Array.isArray(customer.status) ? customer.status[0] || null : customer.status || null,
   };
 }
 
@@ -82,6 +82,8 @@ router.post("/api/auth/signup", express.json(), async (req, res) => {
     }
 
     const passwordHash = await bcrypt.hash(password, BCRYPT_ROUNDS);
+    const verificationToken = crypto.randomBytes(32).toString("hex");
+    const verifyExpiresAt = new Date(Date.now() + VERIFICATION_TOKEN_TTL_MS).toISOString();
 
     const customer = await customerStore.createCustomer({
       email,
@@ -89,11 +91,9 @@ router.post("/api/auth/signup", express.json(), async (req, res) => {
       plan: normalizedPlan,
       contactName,
       companyName,
+      verificationToken,
+      verifyExpiresAt,
     });
-
-    // TODO: customers スキーマに verification_token 等の項目がないため、
-    // このリンクは現状クリックしても認証できない（別途方式を要決定）。
-    const verificationToken = crypto.randomBytes(32).toString("hex");
 
     const mailResult = await sendCustomerMail({
       toEmail: customer.email,
@@ -123,9 +123,7 @@ router.get("/api/auth/verify", async (req, res) => {
     if (!customer) {
       return res.redirect(`${base}/verify-pending.html?error=invalid_token`);
     }
-    const expiresAt = customer.verification_token_expires_at
-      ? new Date(customer.verification_token_expires_at).getTime()
-      : 0;
+    const expiresAt = customer.verifyExpiresAt ? new Date(customer.verifyExpiresAt).getTime() : 0;
     if (!expiresAt || expiresAt < Date.now()) {
       return res.redirect(`${base}/verify-pending.html?error=expired_token`);
     }
@@ -134,7 +132,8 @@ router.get("/api/auth/verify", async (req, res) => {
     await customerStore.markVerified(customer.id, trialEndsAt);
 
     const updated = await customerStore.getCustomerById(customer.id);
-    const sessionToken = signSession(updated);
+    const signedInUser = (updated.users || []).find((u) => u.email === customer.email) || updated.users?.[0];
+    const sessionToken = signSession(updated, signedInUser);
     setSessionCookie(res, sessionToken);
 
     res.redirect(`${base}/onboarding.html`);
@@ -158,24 +157,25 @@ router.post("/api/auth/resend-verification", express.json(), async (req, res) =>
 
   try {
     const customer = await customerStore.getCustomerByEmail(email);
-    if (!customer || customer.is_verified) {
+    if (!customer || customer.isVerified) {
       // 存在有無を漏らさないため、未登録・認証済みいずれも同じ成功レスポンスを返す
       return res.json({ ok: true });
     }
 
     const verificationToken = crypto.randomBytes(32).toString("hex");
-    const verificationTokenExpiresAt = new Date(Date.now() + VERIFICATION_TOKEN_TTL_MS).toISOString();
+    const verifyExpiresAt = new Date(Date.now() + VERIFICATION_TOKEN_TTL_MS).toISOString();
     await customerStore.updateCustomer(customer.id, {
-      verification_token: verificationToken,
-      verification_token_expires_at: verificationTokenExpiresAt,
+      verificationToken,
+      verifyExpiresAt,
     });
 
     lastResendAt.set(key, Date.now());
 
+    const planValue = Array.isArray(customer.plan) ? customer.plan[0] : customer.plan;
     const mailResult = await sendCustomerMail({
       toEmail: customer.email,
       subject: VERIFICATION_EMAIL.subject,
-      text: VERIFICATION_EMAIL.body(buildVerifyUrl(verificationToken), customer.plan),
+      text: VERIFICATION_EMAIL.body(buildVerifyUrl(verificationToken), planValue?.toLowerCase()),
     });
     if (!mailResult.ok) {
       console.warn(`[auth/resend-verification] mail not sent (${mailResult.error}) for id=${customer.id}`);
@@ -195,19 +195,21 @@ router.post("/api/auth/login", express.json(), async (req, res) => {
   }
 
   try {
-    const customer = await customerStore.getCustomerByEmail(email);
-    if (!customer) {
+    // 本人（customers.email）だけでなく招待メンバー（users[].email）も
+    // ログインできるよう、usersの中身まで含めて検索する。
+    const found = await customerStore.findCustomerAndUserByEmail(email);
+    if (!found) {
       return res.status(401).json({ error: "invalid_credentials" });
     }
-    const passwordHash = customer.users?.[0]?.passwordHash || "";
-    const match = await bcrypt.compare(password, passwordHash);
+    const { customer, user } = found;
+    const match = await bcrypt.compare(password, user.passwordHash || "");
     if (!match) {
       return res.status(401).json({ error: "invalid_credentials" });
     }
 
-    const sessionToken = signSession(customer);
+    const sessionToken = signSession(customer, user);
     setSessionCookie(res, sessionToken);
-    res.json({ ok: true, isVerified: Boolean(customer.is_verified) });
+    res.json({ ok: true, isVerified: Boolean(customer.isVerified) });
   } catch (err) {
     console.error("[auth/login] failed:", err);
     res.status(500).json({ error: "internal_error" });
@@ -222,7 +224,14 @@ router.post("/api/auth/logout", (req, res) => {
 router.get("/api/auth/me", requireAuth, (req, res) => {
   const store = loadStore();
   const connected = Object.keys(store[req.customer.id] || {});
-  res.json({ ...safeCustomer(req.customer), connectedPlatforms: connected });
+  res.json({
+    ...safeCustomer(req.customer),
+    connectedPlatforms: connected,
+    user: {
+      email: req.user.email,
+      role: Array.isArray(req.user.role) ? req.user.role[0] || null : req.user.role || null,
+    },
+  });
 });
 
 module.exports = router;

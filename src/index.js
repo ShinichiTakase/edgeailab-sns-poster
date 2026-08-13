@@ -8,6 +8,7 @@ const facebookRoutes = require("./routes/facebook");
 const instagramRoutes = require("./routes/instagram");
 const authRoutes = require("./routes/auth");
 const billingRoutes = require("./routes/billing");
+const teamRoutes = require("./routes/team");
 
 const app = express();
 app.use(threadsRoutes);
@@ -16,6 +17,7 @@ app.use(facebookRoutes);
 app.use(instagramRoutes);
 app.use(authRoutes);
 app.use(billingRoutes);
+app.use(teamRoutes);
 
 const port = process.env.PORT || 3000;
 app.listen(port, () => {

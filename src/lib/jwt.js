@@ -5,10 +5,12 @@ const jwt = require("jsonwebtoken");
 const COOKIE_NAME = "sns_poster_session";
 const EXPIRES_IN = "30d";
 
-function signSession(customer) {
+// customers は1アカウントに複数ユーザー（users繰り返しフィールド）を持ちうるため、
+// セッションにはアカウント（customer.id）だけでなく、ログイン中の個人（user.userId）も入れる。
+function signSession(customer, user) {
   const secret = process.env.JWT_SECRET;
   if (!secret) throw new Error("JWT_SECRET が未設定です");
-  return jwt.sign({ sub: customer.id, email: customer.email }, secret, {
+  return jwt.sign({ sub: customer.id, userId: user.userId, email: user.email }, secret, {
     expiresIn: EXPIRES_IN,
   });
 }

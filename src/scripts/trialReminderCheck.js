@@ -44,7 +44,7 @@ async function main() {
     }
 
     try {
-      await customerStore.updateCustomer(customer.id, { trial_reminder_sent: true });
+      await customerStore.updateCustomer(customer.id, { trialReminderSent: true });
       succeeded++;
     } catch (err) {
       failed++;

@@ -37,4 +37,18 @@ const TRIAL_ENDING_EMAIL = {
     ].join("\n"),
 };
 
-module.exports = { VERIFICATION_EMAIL, TRIAL_ENDING_EMAIL, planLabel };
+const INVITATION_EMAIL = {
+  subject: "【EdgeAI Lab】メンバー招待のお知らせ",
+  body: (companyName, acceptUrl) =>
+    [
+      `${companyName ? `${companyName}様のチーム` : "EdgeAI Lab"}のワークスペースに招待されました。`,
+      "",
+      "以下のリンクからパスワードを設定し、招待を承諾してください。",
+      acceptUrl,
+      "",
+      "このリンクの有効期限は7日間です。",
+      "心当たりがない場合は、本メールを破棄してください。",
+    ].join("\n"),
+};
+
+module.exports = { VERIFICATION_EMAIL, TRIAL_ENDING_EMAIL, INVITATION_EMAIL, planLabel };

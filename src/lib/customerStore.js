@@ -68,7 +68,7 @@ async function getCustomerById(id) {
 
 async function getCustomerByVerificationToken(token) {
   const res = await microcmsFetch(
-    `/customers?filters=verification_token[equals]${escFilterValue(token)}&limit=1`
+    `/customers?filters=verificationToken[equals]${escFilterValue(token)}&limit=1`
   );
   if (!res.ok) {
     const text = await res.text().catch(() => "");
@@ -94,7 +94,15 @@ function toPlanChoice(plan) {
  * status/plan はセレクト項目のため配列形式で送信する。
  * @returns 作成されたレコード（idを含む）
  */
-async function createCustomer({ email, passwordHash, plan, contactName, companyName }) {
+async function createCustomer({
+  email,
+  passwordHash,
+  plan,
+  contactName,
+  companyName,
+  verificationToken,
+  verifyExpiresAt,
+}) {
   const res = await microcmsFetch(`/customers`, {
     method: "POST",
     body: JSON.stringify({
@@ -104,12 +112,16 @@ async function createCustomer({ email, passwordHash, plan, contactName, companyN
       companyName: (companyName || "").trim(),
       status: ["trial"],
       plan: [toPlanChoice(plan)],
+      verificationToken,
+      verifyExpiresAt,
       users: [
         {
           fieldId: "users",
           userId: crypto.randomUUID(),
           email: email.trim(),
           passwordHash: passwordHash,
+          // サインアップした本人は自アカウントの管理者（他メンバーを招待できる）
+          role: ["管理者"],
         },
       ],
     }),
@@ -134,14 +146,111 @@ async function updateCustomer(id, patch) {
   return true;
 }
 
-/** メール認証を完了させ、トライアル期限を確定する */
+/** メール認証を完了させ、トライアル期限を確定し、使用済みトークンを消す */
 async function markVerified(id, trialEndsAtIso) {
   return updateCustomer(id, {
-    is_verified: true,
-    verification_token: "",
-    verification_token_expires_at: "",
-    trial_ends_at: trialEndsAtIso,
+    isVerified: true,
+    verificationToken: "",
+    verifyExpiresAt: "",
+    trialEndsAt: trialEndsAtIso,
   });
+}
+
+/**
+ * customers全件を取得する（ページング）。
+ * users繰り返しフィールドの中身はmicroCMSのfiltersで検索できないため、
+ * メールアドレス/招待トークンでの検索はここから取得した全件をJS側で走査する。
+ * 件数が増えたら見直しが必要な暫定実装。
+ */
+async function listAllCustomers() {
+  const all = [];
+  const limit = 100;
+  let offset = 0;
+  for (;;) {
+    const res = await microcmsFetch(`/customers?limit=${limit}&offset=${offset}`);
+    if (!res.ok) {
+      const text = await res.text().catch(() => "");
+      throw new Error(`[customerStore] listAllCustomers failed ${res.status} ${text.slice(0, 300)}`);
+    }
+    const json = await res.json();
+    const contents = Array.isArray(json.contents) ? json.contents : [];
+    all.push(...contents);
+    if (contents.length < limit) break;
+    offset += limit;
+  }
+  return all;
+}
+
+/** メールアドレスに一致する users 要素を持つ顧客を探す（本人・招待メンバー問わず） */
+async function findCustomerAndUserByEmail(email) {
+  const target = email.trim().toLowerCase();
+  const customers = await listAllCustomers();
+  for (const customer of customers) {
+    const user = (customer.users || []).find((u) => (u.email || "").toLowerCase() === target);
+    if (user) return { customer, user };
+  }
+  return null;
+}
+
+/** 招待トークンに一致する users 要素を持つ顧客を探す */
+async function findCustomerAndUserByInvitationToken(token) {
+  const customers = await listAllCustomers();
+  for (const customer of customers) {
+    const user = (customer.users || []).find((u) => u.invitationToken === token);
+    if (user) return { customer, user };
+  }
+  return null;
+}
+
+/**
+ * 管理者が新しいメンバーを招待する。userId/passwordHash未設定のまま
+ * users配列に要素を追加し、招待承諾（acceptInvitation）を待つ状態にする。
+ */
+async function addInvitedUser(customerId, { email, role, invitedByUserId, invitationToken, invitationExpiresAt }) {
+  const customer = await getCustomerById(customerId);
+  if (!customer) {
+    throw new Error(`[customerStore] addInvitedUser: customer not found id=${customerId}`);
+  }
+  const users = Array.isArray(customer.users) ? customer.users : [];
+  const invitedUser = {
+    fieldId: "users",
+    email: email.trim(),
+    role: [role],
+    invitedBy: invitedByUserId,
+    invitationToken,
+    invitationExpiresAt,
+    invitationStatus: ["招待中"],
+  };
+  await updateCustomer(customerId, { users: [...users, invitedUser] });
+  return invitedUser;
+}
+
+/**
+ * 招待メールのリンクからパスワードを設定し、招待を承諾する。
+ * 対象のusers要素にuserIdを新規発行してpasswordHashを保存し、
+ * invitationStatusを承諾済みに、招待トークンはクリアする。
+ */
+async function acceptInvitation(customerId, invitationToken, passwordHash) {
+  const customer = await getCustomerById(customerId);
+  if (!customer) {
+    throw new Error(`[customerStore] acceptInvitation: customer not found id=${customerId}`);
+  }
+  const users = Array.isArray(customer.users) ? customer.users : [];
+  const index = users.findIndex((u) => u.invitationToken === invitationToken);
+  if (index === -1) return null;
+
+  const updatedUser = {
+    ...users[index],
+    userId: crypto.randomUUID(),
+    passwordHash,
+    invitationStatus: ["承諾済み"],
+    invitationToken: "",
+    invitationExpiresAt: "",
+  };
+  const newUsers = [...users];
+  newUsers[index] = updatedUser;
+  await updateCustomer(customerId, { users: newUsers });
+  return updatedUser;
 }
 
 /**
@@ -151,8 +260,8 @@ async function markVerified(id, trialEndsAtIso) {
 async function listCustomersWithUpcomingTrialEnd(withinDays) {
   const cutoff = new Date(Date.now() + withinDays * 24 * 60 * 60 * 1000).toISOString();
   const filters = [
-    "is_verified[equals]true",
-    "trial_reminder_sent[equals]false",
+    "isVerified[equals]true",
+    "trialReminderSent[equals]false",
     `trialEndsAt[less_than]${cutoff}`,
   ].join("[and]");
   const res = await microcmsFetch(`/customers?filters=${encodeURIComponent(filters)}&limit=100`);
@@ -175,4 +284,9 @@ module.exports = {
   updateCustomer,
   markVerified,
   listCustomersWithUpcomingTrialEnd,
+  listAllCustomers,
+  findCustomerAndUserByEmail,
+  findCustomerAndUserByInvitationToken,
+  addInvitedUser,
+  acceptInvitation,
 };

@@ -32,7 +32,12 @@ async function requireAuth(req, res, next) {
     if (!customer) {
       return res.status(401).json({ error: "unauthenticated" });
     }
+    const user = (customer.users || []).find((u) => u.userId === payload.userId);
+    if (!user) {
+      return res.status(401).json({ error: "unauthenticated" });
+    }
     req.customer = customer;
+    req.user = user;
     next();
   } catch (err) {
     console.error("[requireAuth] failed to load customer:", err);
