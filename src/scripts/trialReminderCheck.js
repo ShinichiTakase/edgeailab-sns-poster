@@ -26,11 +26,15 @@ async function main() {
   for (const customer of candidates) {
     const base = process.env.APP_BASE_URL || "https://edgeailab.net";
     const upgradeUrl = `${base}/upgrade.html`;
+    // customers.plan はセレクト項目のため ["Standard"] のような配列・先頭大文字で
+    // 返ってくる。planLabel()は小文字キー（standard等）を期待するため変換する。
+    const planValue = Array.isArray(customer.plan) ? customer.plan[0] : customer.plan;
+    const planForLabel = typeof planValue === "string" ? planValue.toLowerCase() : planValue;
 
     const mailResult = await sendCustomerMail({
       toEmail: customer.email,
       subject: TRIAL_ENDING_EMAIL.subject,
-      text: TRIAL_ENDING_EMAIL.body(daysLeft(customer.trial_ends_at), upgradeUrl, customer.plan),
+      text: TRIAL_ENDING_EMAIL.body(daysLeft(customer.trialEndsAt), upgradeUrl, planForLabel),
     });
 
     if (!mailResult.ok) {

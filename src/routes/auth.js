@@ -188,7 +188,7 @@ router.post("/api/auth/login", express.json(), async (req, res) => {
     if (!customer) {
       return res.status(401).json({ error: "invalid_credentials" });
     }
-    const passwordHash = customer.users?.[0]?.password_hash || "";
+    const passwordHash = customer.users?.[0]?.passwordHash || "";
     const match = await bcrypt.compare(password, passwordHash);
     if (!match) {
       return res.status(401).json({ error: "invalid_credentials" });

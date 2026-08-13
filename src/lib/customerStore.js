@@ -1,7 +1,7 @@
 // microCMS の customers スキーマ（サインアップ/認証/課金用）への読み書き。
 // 108teaworks/next-app/lib/microcmsCustomers.ts のREST呼び出しパターンをCommonJSへ移植したもの。
 // customers は microCMS無料プランの5スキーマ上限に対応するため固定のトップレベル項目
-//（slug/companyName/contactName/status/plan等）を持ち、認証情報（email/password_hash）は
+//（slug/companyName/contactName/status/plan等）を持ち、認証情報（email/passwordHash）は
 // users 繰り返しフィールドにネストする設計。slugはコード側で自動生成し、
 // json/client_tokens.json のキーとして流用する。
 const crypto = require("crypto");
@@ -89,7 +89,7 @@ function toPlanChoice(plan) {
 
 /**
  * 新規顧客レコードを作成する。
- * password_hash 等の認証情報は users 繰り返しフィールドにネストする
+ * passwordHash 等の認証情報は users 繰り返しフィールドにネストする
  *（customers トップレベルには存在しないため）。
  * status/plan はセレクト項目のため配列形式で送信する。
  * @returns 作成されたレコード（idを含む）
@@ -107,9 +107,9 @@ async function createCustomer({ email, passwordHash, plan, contactName, companyN
       users: [
         {
           fieldId: "users",
-          user_id: crypto.randomUUID(),
+          userId: crypto.randomUUID(),
           email: email.trim(),
-          password_hash: passwordHash,
+          passwordHash: passwordHash,
         },
       ],
     }),
@@ -153,7 +153,7 @@ async function listCustomersWithUpcomingTrialEnd(withinDays) {
   const filters = [
     "is_verified[equals]true",
     "trial_reminder_sent[equals]false",
-    `trial_ends_at[less_than]${cutoff}`,
+    `trialEndsAt[less_than]${cutoff}`,
   ].join("[and]");
   const res = await microcmsFetch(`/customers?filters=${encodeURIComponent(filters)}&limit=100`);
   if (!res.ok) {

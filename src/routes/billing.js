@@ -29,26 +29,33 @@ function pricesForPlan(plan) {
   return map[plan] || null;
 }
 
+// customers.plan はセレクト項目のため ["Standard"] のような配列・先頭大文字で
+// 返ってくる。pricesForPlan()のキー（basic/standard/advanced）に正規化する。
+function planKey(customer) {
+  const value = Array.isArray(customer.plan) ? customer.plan[0] : customer.plan;
+  return typeof value === "string" ? value.toLowerCase() : null;
+}
+
 router.post("/api/billing/create-checkout-session", requireAuth, express.json(), async (req, res) => {
   const stripe = getStripe();
   if (!stripe) {
     return res.status(500).json({ error: "stripe_not_configured" });
   }
 
-  const prices = pricesForPlan(req.customer.plan);
+  const prices = pricesForPlan(planKey(req.customer));
   if (!prices || !prices.base || !prices.metered) {
-    console.error(`[billing/create-checkout-session] price not configured for plan=${req.customer.plan}`);
+    console.error(`[billing/create-checkout-session] price not configured for plan=${JSON.stringify(req.customer.plan)}`);
     return res.status(500).json({ error: "plan_not_configured" });
   }
 
   const base = process.env.APP_BASE_URL || "https://edgeailab.net";
 
   try {
-    let stripeCustomerId = req.customer.stripe_customer_id;
+    let stripeCustomerId = req.customer.stripeCustomerId;
     if (!stripeCustomerId) {
       const stripeCustomer = await stripe.customers.create({ email: req.customer.email });
       stripeCustomerId = stripeCustomer.id;
-      await customerStore.updateCustomer(req.customer.id, { stripe_customer_id: stripeCustomerId });
+      await customerStore.updateCustomer(req.customer.id, { stripeCustomerId });
     }
 
     const session = await stripe.checkout.sessions.create({
@@ -91,8 +98,9 @@ router.post("/api/billing/webhook", express.raw({ type: "application/json" }), a
       const customerId = session.client_reference_id;
       if (customerId) {
         await customerStore.updateCustomer(customerId, {
-          stripe_customer_id: session.customer,
-          stripe_subscription_status: "active",
+          stripeCustomerId: session.customer,
+          stripeSubscription: session.subscription,
+          status: ["active"],
         });
         console.info(`[billing/webhook] activated subscription for customer id=${customerId}`);
       } else {
