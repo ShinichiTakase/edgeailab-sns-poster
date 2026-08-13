@@ -5,7 +5,7 @@ const customerStore = require("../lib/customerStore");
 const { sendCustomerMail } = require("../lib/customerMailer");
 const { INVITATION_EMAIL } = require("../lib/emailTemplates");
 const { signSession, setSessionCookie } = require("../lib/jwt");
-const { requireAuth } = require("../middleware/requireAuth");
+const { requireAuth, requireVerified } = require("../middleware/requireAuth");
 
 const router = express.Router();
 
@@ -41,7 +41,7 @@ function invitationStatusOf(user) {
   return Array.isArray(user.invitationStatus) ? user.invitationStatus[0] : user.invitationStatus;
 }
 
-router.post("/api/team/invite", requireAuth, express.json(), async (req, res) => {
+router.post("/api/team/invite", requireAuth, requireVerified, express.json(), async (req, res) => {
   if (currentUserRole(req.user) !== "管理者") {
     return res.status(403).json({ error: "forbidden" });
   }

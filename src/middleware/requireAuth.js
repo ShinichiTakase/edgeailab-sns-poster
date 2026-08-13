@@ -45,4 +45,14 @@ async function requireAuth(req, res, next) {
   }
 }
 
-module.exports = { requireAuth, readSessionToken, parseCookieHeader };
+// requireAuthの後段に挟んで使う。メール未認証のアカウントで
+// SNS実投稿・メンバー招待送信など「実害のある操作」をブロックするためのガード。
+// フロント側のボタン非活性化と対で、サーバー側の必須チェックとして機能する。
+function requireVerified(req, res, next) {
+  if (!req.customer || !req.customer.isVerified) {
+    return res.status(403).json({ error: "email_not_verified", message: "メール認証が完了していません" });
+  }
+  next();
+}
+
+module.exports = { requireAuth, requireVerified, readSessionToken, parseCookieHeader };
