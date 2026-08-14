@@ -2,8 +2,20 @@ const express = require("express");
 const Stripe = require("stripe");
 const customerStore = require("../lib/customerStore");
 const { requireAuth } = require("../middleware/requireAuth");
+const { getXSurcharge } = require("../lib/surchargeConfig");
 
 const router = express.Router();
+
+// pricing.html・dashboard.htmlが表示用に参照する公開エンドポイント。
+// 個人情報を含まないため認証不要。
+router.get("/api/billing/x-surcharge", (req, res) => {
+  try {
+    res.json(getXSurcharge());
+  } catch (err) {
+    console.error("[billing/x-surcharge] failed to read config:", err);
+    res.status(500).json({ error: "internal_error" });
+  }
+});
 
 function getStripe() {
   const key = process.env.STRIPE_SECRET_KEY;

@@ -1,0 +1,8 @@
+{
+  "x_surcharge": {
+    "amount_jpy": 32.0,
+    "currency": "JPY",
+    "last_updated": "2026-08-15",
+    "unit": "per_post"
+  }
+}
