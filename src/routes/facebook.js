@@ -46,7 +46,22 @@ const SUCCESS_HTML = `<!doctype html>
   .box { border: 2px solid #333; border-radius: 8px; padding: 2rem 3rem; text-align: center; }
 </style>
 </head>
-<body><div class="box"><p>Facebookページの連携が完了しました。このページを閉じてください。</p></div></body></html>`;
+<body><div class="box">
+  <p id="msg">Facebookページの連携が完了しました。連携設定ページに戻ります…</p>
+  <p><a id="fallback-link" href="/onboarding.html?connected=facebook">戻らない場合はこちら</a></p>
+</div>
+<script>
+  (function () {
+    var backUrl = "/onboarding.html?connected=facebook";
+    if (window.opener && window.opener !== window) {
+      document.getElementById("msg").textContent = "Facebookページの連携が完了しました。このタブを閉じてダッシュボードにお戻りください。";
+      document.getElementById("fallback-link").style.display = "none";
+    } else {
+      setTimeout(function () { location.href = backUrl; }, 1200);
+    }
+  })();
+</script>
+</body></html>`;
 
 const ERROR_HTML = `<!doctype html>
 <html lang="ja"><head><meta charset="utf-8"><title>エラー</title></head>

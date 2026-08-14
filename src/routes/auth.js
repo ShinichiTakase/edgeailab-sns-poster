@@ -41,6 +41,7 @@ function buildVerifyUrl(token) {
 function safeCustomer(customer) {
   return {
     email: customer.email,
+    contactName: customer.contactName || null,
     plan: Array.isArray(customer.plan) ? customer.plan[0] || null : customer.plan || null,
     isVerified: Boolean(customer.isVerified),
     trialEndsAt: customer.trialEndsAt || null,
@@ -104,6 +105,12 @@ router.post("/api/auth/signup", express.json(), async (req, res) => {
       console.warn(`[auth/signup] verification mail not sent (${mailResult.error}) for id=${customer.id}`);
     }
 
+    // サインアップ完了直後からダッシュボードを表示するため、
+    // メール未認証のままログイン状態にする（機能制限はisVerifiedで別途ガード）。
+    const signedInUser = (customer.users || []).find((u) => u.email === customer.email) || customer.users?.[0];
+    const sessionToken = signSession(customer, signedInUser);
+    setSessionCookie(res, sessionToken);
+
     res.json({ ok: true });
   } catch (err) {
     console.error("[auth/signup] failed:", err);
@@ -136,7 +143,7 @@ router.get("/api/auth/verify", async (req, res) => {
     const sessionToken = signSession(updated, signedInUser);
     setSessionCookie(res, sessionToken);
 
-    res.redirect(`${base}/onboarding.html`);
+    res.redirect(`${base}/dashboard.html`);
   } catch (err) {
     console.error("[auth/verify] failed:", err);
     res.redirect(`${base}/verify-pending.html?error=internal_error`);
