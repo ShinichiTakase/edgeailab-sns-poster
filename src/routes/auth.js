@@ -85,6 +85,7 @@ router.post("/api/auth/signup", express.json(), async (req, res) => {
     const passwordHash = await bcrypt.hash(password, BCRYPT_ROUNDS);
     const verificationToken = crypto.randomBytes(32).toString("hex");
     const verifyExpiresAt = new Date(Date.now() + VERIFICATION_TOKEN_TTL_MS).toISOString();
+    const trialEndsAt = new Date(Date.now() + TRIAL_DAYS * 24 * 60 * 60 * 1000).toISOString();
 
     const customer = await customerStore.createCustomer({
       email,
@@ -94,6 +95,7 @@ router.post("/api/auth/signup", express.json(), async (req, res) => {
       companyName,
       verificationToken,
       verifyExpiresAt,
+      trialEndsAt,
     });
 
     const mailResult = await sendCustomerMail({
@@ -135,8 +137,7 @@ router.get("/api/auth/verify", async (req, res) => {
       return res.redirect(`${base}/verify-pending.html?error=expired_token`);
     }
 
-    const trialEndsAt = new Date(Date.now() + TRIAL_DAYS * 24 * 60 * 60 * 1000).toISOString();
-    await customerStore.markVerified(customer.id, trialEndsAt);
+    await customerStore.markVerified(customer.id);
 
     const updated = await customerStore.getCustomerById(customer.id);
     const signedInUser = (updated.users || []).find((u) => u.email === customer.email) || updated.users?.[0];

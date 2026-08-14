@@ -102,6 +102,7 @@ async function createCustomer({
   companyName,
   verificationToken,
   verifyExpiresAt,
+  trialEndsAt,
 }) {
   const res = await microcmsFetch(`/customers`, {
     method: "POST",
@@ -114,6 +115,7 @@ async function createCustomer({
       plan: [toPlanChoice(plan)],
       verificationToken,
       verifyExpiresAt,
+      trialEndsAt,
       users: [
         {
           fieldId: "users",
@@ -146,13 +148,12 @@ async function updateCustomer(id, patch) {
   return true;
 }
 
-/** メール認証を完了させ、トライアル期限を確定し、使用済みトークンを消す */
-async function markVerified(id, trialEndsAtIso) {
+/** メール認証を完了させ、使用済みトークンを消す（trialEndsAtはサインアップ時点で確定済み） */
+async function markVerified(id) {
   return updateCustomer(id, {
     isVerified: true,
     verificationToken: "",
     verifyExpiresAt: "",
-    trialEndsAt: trialEndsAtIso,
   });
 }
 
