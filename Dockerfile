@@ -9,6 +9,7 @@ COPY package.json ./
 RUN npm install --omit=dev
 
 COPY src ./src
+COPY config ./config
 
 EXPOSE 3000
 
