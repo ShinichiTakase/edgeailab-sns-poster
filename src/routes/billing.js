@@ -1,8 +1,9 @@
 const express = require("express");
-const Stripe = require("stripe");
 const customerStore = require("../lib/customerStore");
 const { requireAuth } = require("../middleware/requireAuth");
 const { getXSurcharge } = require("../lib/surchargeConfig");
+const { getStripe } = require("../lib/stripeClient");
+const { planKey, pricesForPlan } = require("../lib/stripePricing");
 
 const router = express.Router();
 
@@ -17,37 +18,6 @@ router.get("/api/billing/x-surcharge", (req, res) => {
   }
 });
 
-function getStripe() {
-  const key = process.env.STRIPE_SECRET_KEY;
-  if (!key) return null;
-  return new Stripe(key);
-}
-
-function pricesForPlan(plan) {
-  const map = {
-    basic: {
-      base: process.env.STRIPE_PRICE_BASIC_BASE,
-      metered: process.env.STRIPE_PRICE_BASIC_METERED,
-    },
-    standard: {
-      base: process.env.STRIPE_PRICE_STANDARD_BASE,
-      metered: process.env.STRIPE_PRICE_STANDARD_METERED,
-    },
-    advanced: {
-      base: process.env.STRIPE_PRICE_ADVANCED_BASE,
-      metered: process.env.STRIPE_PRICE_ADVANCED_METERED,
-    },
-  };
-  return map[plan] || null;
-}
-
-// customers.plan はセレクト項目のため ["Standard"] のような配列・先頭大文字で
-// 返ってくる。pricesForPlan()のキー（basic/standard/advanced）に正規化する。
-function planKey(customer) {
-  const value = Array.isArray(customer.plan) ? customer.plan[0] : customer.plan;
-  return typeof value === "string" ? value.toLowerCase() : null;
-}
-
 router.post("/api/billing/create-checkout-session", requireAuth, express.json(), async (req, res) => {
   const stripe = getStripe();
   if (!stripe) {
@@ -55,7 +25,7 @@ router.post("/api/billing/create-checkout-session", requireAuth, express.json(),
   }
 
   const prices = pricesForPlan(planKey(req.customer));
-  if (!prices || !prices.base || !prices.metered) {
+  if (!prices || !prices.base || !prices.metered || !prices.meteredX) {
     console.error(`[billing/create-checkout-session] price not configured for plan=${JSON.stringify(req.customer.plan)}`);
     return res.status(500).json({ error: "plan_not_configured" });
   }
@@ -74,7 +44,11 @@ router.post("/api/billing/create-checkout-session", requireAuth, express.json(),
       mode: "subscription",
       customer: stripeCustomerId,
       client_reference_id: req.customer.id,
-      line_items: [{ price: prices.base, quantity: 1 }, { price: prices.metered }],
+      line_items: [
+        { price: prices.base, quantity: 1 },
+        { price: prices.metered },
+        { price: prices.meteredX },
+      ],
       success_url: `${base}/dashboard.html?billing=success`,
       cancel_url: `${base}/upgrade.html?billing=cancelled`,
     });
