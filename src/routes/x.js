@@ -1,8 +1,8 @@
 const express = require("express");
 const crypto = require("crypto");
-const { savePlatformTokens } = require("../lib/tokenStore");
+const { savePlatformTokens, findDuplicateOwner } = require("../lib/tokenStore");
 const pkceStore = require("../lib/pkceStore");
-const { requireAuth } = require("../middleware/requireAuth");
+const { requireAuth, blockExpiredTrial } = require("../middleware/requireAuth");
 
 const router = express.Router();
 
@@ -33,7 +33,7 @@ const TOKEN_URL = "https://api.x.com/2/oauth2/token";
 const USERS_ME_URL = "https://api.x.com/2/users/me";
 const SCOPE = "tweet.read tweet.write users.read offline.access";
 
-router.get("/oauth/x/authorize", requireAuth, (req, res) => {
+router.get("/oauth/x/authorize", requireAuth, blockExpiredTrial, (req, res) => {
   const slug = req.customer.id;
 
   const codeVerifier = crypto.randomBytes(64).toString("base64url");
@@ -75,6 +75,14 @@ router.get("/oauth/x/callback", async (req, res) => {
   try {
     const tokens = await exchangeToken(code, codeVerifier);
     const profile = await fetchUser(tokens.access_token);
+
+    const duplicate = findDuplicateOwner("x", [profile.id], slug);
+    if (duplicate) {
+      console.warn(
+        `[x/callback] duplicate account: slug=${slug} user_id=${profile.id} already linked to slug=${duplicate.slug}`
+      );
+      return res.redirect("/upgrade.html?reason=duplicate_account");
+    }
 
     const now = new Date();
     const expiresAt = new Date(now.getTime() + tokens.expires_in * 1000);

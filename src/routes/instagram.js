@@ -2,9 +2,9 @@ const express = require("express");
 const crypto = require("crypto");
 const fs = require("fs");
 const path = require("path");
-const { savePlatformTokens, deletePlatformTokensByUserId } = require("../lib/tokenStore");
+const { savePlatformTokens, deletePlatformTokensByUserId, findDuplicateOwner } = require("../lib/tokenStore");
 const pkceStore = require("../lib/pkceStore");
-const { requireAuth } = require("../middleware/requireAuth");
+const { requireAuth, blockExpiredTrial } = require("../middleware/requireAuth");
 
 const router = express.Router();
 
@@ -76,7 +76,7 @@ const GRAPH_URL = `https://graph.instagram.com/${GRAPH_API_VERSION}`;
 
 // 動作確認・実運用の両方でこのエンドポイントから開始する。
 // state を発行してslug（クライアント識別子）と紐付け、Facebook/Threadsの実装と同じ方式でコールバックへ受け渡す。
-router.get("/oauth/instagram/start", requireAuth, (req, res) => {
+router.get("/oauth/instagram/start", requireAuth, blockExpiredTrial, (req, res) => {
   const slug = req.customer.id;
 
   const state = crypto.randomBytes(24).toString("hex");
@@ -128,6 +128,14 @@ router.get("/oauth/instagram/callback", async (req, res) => {
     // Facebook/ThreadsのPage検証と同等の位置づけとして、プロフィール取得の成功を
     // 読み取り専用API疎通確認とみなす。
     const profile = await fetchProfile(longLived.access_token);
+
+    const duplicate = findDuplicateOwner("instagram", [profile.id], slug);
+    if (duplicate) {
+      logWarn(
+        `[instagram/callback] duplicate account: slug=${slug} user_id=${profile.id} already linked to slug=${duplicate.slug}`
+      );
+      return res.redirect("/upgrade.html?reason=duplicate_account");
+    }
 
     const now = new Date();
     savePlatformTokens(slug, "instagram", {

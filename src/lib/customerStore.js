@@ -254,6 +254,33 @@ async function acceptInvitation(customerId, invitationToken, passwordHash) {
   return updatedUser;
 }
 
+// トライアル終了後、支払い情報未登録のまま利用を続けようとしていないかの判定。
+// SNS連携開始前のガード（requireAuth.js の blockExpiredTrial）で使用する。
+function isTrialExpiredWithoutPayment(customer) {
+  const status = Array.isArray(customer.status) ? customer.status[0] : customer.status;
+  if (status !== "trial") return false;
+  if (!customer.trialEndsAt) return false;
+  if (new Date(customer.trialEndsAt).getTime() >= Date.now()) return false;
+  return !customer.stripeSubscription;
+}
+
+// トライアル中の投稿数上限（全SNS合計）。実投稿エンドポイント実装時に、
+// 成功した投稿ごとにincrementTrialPostCountを呼び出してカウントする想定。
+const TRIAL_POST_LIMIT = 60;
+
+function getTrialPostCount(customer) {
+  const value = Number(customer.trialPostCount);
+  return Number.isFinite(value) ? value : 0;
+}
+
+// customers.trialPostCount フィールド（数値、未作成の場合はmicroCMS管理画面で
+// 追加が必要）をインクリメントする。呼び出し側で最新のcustomerを渡すこと。
+async function incrementTrialPostCount(customer) {
+  const next = getTrialPostCount(customer) + 1;
+  await updateCustomer(customer.id, { trialPostCount: next });
+  return next;
+}
+
 /**
  * トライアル終了が迫っていてリマインド未送信の顧客一覧を取得する。
  * @param {number} withinDays 残り何日以内を対象にするか
@@ -284,6 +311,10 @@ module.exports = {
   createCustomer,
   updateCustomer,
   markVerified,
+  isTrialExpiredWithoutPayment,
+  TRIAL_POST_LIMIT,
+  getTrialPostCount,
+  incrementTrialPostCount,
   listCustomersWithUpcomingTrialEnd,
   listAllCustomers,
   findCustomerAndUserByEmail,

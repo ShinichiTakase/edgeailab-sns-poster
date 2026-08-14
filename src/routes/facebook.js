@@ -2,9 +2,9 @@ const express = require("express");
 const crypto = require("crypto");
 const fs = require("fs");
 const path = require("path");
-const { savePlatformTokens, deletePlatformTokensByUserId } = require("../lib/tokenStore");
+const { savePlatformTokens, deletePlatformTokensByUserId, findDuplicateOwner } = require("../lib/tokenStore");
 const pkceStore = require("../lib/pkceStore");
-const { requireAuth } = require("../middleware/requireAuth");
+const { requireAuth, blockExpiredTrial } = require("../middleware/requireAuth");
 
 const router = express.Router();
 
@@ -73,7 +73,7 @@ const GRAPH_URL = `https://graph.facebook.com/${GRAPH_API_VERSION}`;
 
 // 動作確認・実運用の両方でこのエンドポイントから開始する。
 // state を発行してslug（クライアント識別子）と紐付け、Xの実装と同じ方式でコールバックへ受け渡す。
-router.get("/oauth/facebook/start", requireAuth, (req, res) => {
+router.get("/oauth/facebook/start", requireAuth, blockExpiredTrial, (req, res) => {
   const slug = req.customer.id;
 
   const state = crypto.randomBytes(24).toString("hex");
@@ -122,6 +122,18 @@ router.get("/oauth/facebook/callback", async (req, res) => {
     if (verifiedPages.length === 0) {
       logError(`[facebook/callback] no pages passed verification for slug=${slug}`);
       return res.status(400).send(ERROR_HTML);
+    }
+
+    const duplicate = findDuplicateOwner(
+      "facebook",
+      verifiedPages.map((p) => p.pageId),
+      slug
+    );
+    if (duplicate) {
+      logWarn(
+        `[facebook/callback] duplicate page: slug=${slug} pageId=${duplicate.identifier} already linked to slug=${duplicate.slug}`
+      );
+      return res.redirect("/upgrade.html?reason=duplicate_account");
     }
 
     const now = new Date();

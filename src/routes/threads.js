@@ -1,8 +1,8 @@
 const express = require("express");
 const crypto = require("crypto");
-const { savePlatformTokens } = require("../lib/tokenStore");
+const { savePlatformTokens, findDuplicateOwner } = require("../lib/tokenStore");
 const pkceStore = require("../lib/pkceStore");
-const { requireAuth } = require("../middleware/requireAuth");
+const { requireAuth, blockExpiredTrial } = require("../middleware/requireAuth");
 
 const router = express.Router();
 
@@ -33,7 +33,7 @@ const SCOPE = "threads_basic,threads_content_publish";
 
 // requireAuthでログイン中の顧客のみ開始でき、req.customer.id（microCMSの顧客レコードid）を
 // slug（json/client_tokens.jsonのキー）としてstateに紐付ける。Facebook/Instagramと同じ方式。
-router.get("/oauth/threads/start", requireAuth, (req, res) => {
+router.get("/oauth/threads/start", requireAuth, blockExpiredTrial, (req, res) => {
   const slug = req.customer.id;
   const state = crypto.randomBytes(24).toString("hex");
   pkceStore.put(state, { slug });
@@ -70,6 +70,14 @@ router.get("/threads/callback", async (req, res) => {
     const shortLived = await exchangeShortLivedToken(code);
     const longLived = await exchangeLongLivedToken(shortLived.access_token);
     const profile = await fetchProfile(longLived.access_token);
+
+    const duplicate = findDuplicateOwner("threads", [profile.id], slug);
+    if (duplicate) {
+      console.warn(
+        `[threads/callback] duplicate account: slug=${slug} user_id=${profile.id} already linked to slug=${duplicate.slug}`
+      );
+      return res.redirect("/upgrade.html?reason=duplicate_account");
+    }
 
     const now = new Date();
     const expiresAt = new Date(now.getTime() + longLived.expires_in * 1000);

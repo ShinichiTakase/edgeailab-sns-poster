@@ -43,4 +43,31 @@ function deletePlatformTokensByUserId(platform, userId) {
   return affectedSlugs;
 }
 
-module.exports = { loadStore, saveStore, savePlatformTokens, deletePlatformTokensByUserId };
+// 指定platformの識別子（x/threads/instagramはuser_id、facebookはpages[].pageId）が
+// 自分（excludeSlug）以外の既存slugで既に使われていないか横断検索する。
+// identifiersは常に配列（facebookは複数ページを一括チェックするため）。
+function findDuplicateOwner(platform, identifiers, excludeSlug) {
+  const store = loadStore();
+  for (const slug of Object.keys(store)) {
+    if (slug === excludeSlug) continue;
+    const entry = store[slug] && store[slug][platform];
+    if (!entry) continue;
+
+    if (platform === "facebook") {
+      const pageIds = (entry.pages || []).map((p) => p.pageId);
+      const matched = identifiers.find((id) => pageIds.includes(id));
+      if (matched) return { slug, identifier: matched };
+    } else if (identifiers.includes(entry.user_id)) {
+      return { slug, identifier: entry.user_id };
+    }
+  }
+  return null;
+}
+
+module.exports = {
+  loadStore,
+  saveStore,
+  savePlatformTokens,
+  deletePlatformTokensByUserId,
+  findDuplicateOwner,
+};
