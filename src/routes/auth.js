@@ -3,10 +3,11 @@ const crypto = require("crypto");
 const bcrypt = require("bcrypt");
 const customerStore = require("../lib/customerStore");
 const { sendCustomerMail } = require("../lib/customerMailer");
-const { VERIFICATION_EMAIL } = require("../lib/emailTemplates");
+const { VERIFICATION_EMAIL, PASSWORD_RESET_EMAIL } = require("../lib/emailTemplates");
 const { signSession, setSessionCookie, clearSessionCookie } = require("../lib/jwt");
 const { requireAuth } = require("../middleware/requireAuth");
 const { loadStore } = require("../lib/tokenStore");
+const { getStripe } = require("../lib/stripeClient");
 
 const router = express.Router();
 
@@ -15,8 +16,11 @@ const VERIFICATION_TOKEN_TTL_MS = 24 * 60 * 60 * 1000;
 const TRIAL_DAYS = 30;
 const BCRYPT_ROUNDS = 12;
 const RESEND_MIN_INTERVAL_MS = 60 * 1000;
+const PASSWORD_RESET_TOKEN_TTL_MS = 60 * 60 * 1000;
+const PASSWORD_RESET_MIN_INTERVAL_MS = 3 * 60 * 1000;
 
 const lastResendAt = new Map();
+const lastPasswordResetRequestAt = new Map();
 
 function isValidEmail(email) {
   return typeof email === "string" && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim());
@@ -36,6 +40,11 @@ function isValidPassword(password) {
 function buildVerifyUrl(token) {
   const base = process.env.APP_BASE_URL || "https://edgeailab.net";
   return `${base}/api/auth/verify?token=${encodeURIComponent(token)}`;
+}
+
+function buildResetPasswordUrl(token) {
+  const base = process.env.APP_BASE_URL || "https://edgeailab.net";
+  return `${base}/reset-password.html?token=${encodeURIComponent(token)}`;
 }
 
 function safeCustomer(customer) {
@@ -196,6 +205,111 @@ router.post("/api/auth/resend-verification", express.json(), async (req, res) =>
   }
 });
 
+router.post("/api/auth/request-password-reset", express.json(), async (req, res) => {
+  const { email } = req.body || {};
+  if (!isValidEmail(email)) {
+    return res.status(400).json({ error: "invalid_email" });
+  }
+
+  // 登録有無を判別できないよう、対象アカウントの有無に関わらず同じキーで
+  // レート制限を適用する（429の発生有無自体が列挙攻撃の手がかりにならないようにする）。
+  const key = email.trim().toLowerCase();
+  const last = lastPasswordResetRequestAt.get(key) || 0;
+  if (Date.now() - last < PASSWORD_RESET_MIN_INTERVAL_MS) {
+    return res.status(429).json({ error: "too_many_requests" });
+  }
+  lastPasswordResetRequestAt.set(key, Date.now());
+
+  try {
+    const found = await customerStore.findCustomerAndUserByEmail(email);
+    if (found) {
+      const { customer, user } = found;
+      const resetToken = crypto.randomBytes(32).toString("hex");
+      const resetExpiresAt = new Date(Date.now() + PASSWORD_RESET_TOKEN_TTL_MS).toISOString();
+      // 新しいトークンで上書きするため、過去に発行した未使用トークンは自動的に無効化される
+      await customerStore.setPasswordResetToken(customer.id, user.userId, resetToken, resetExpiresAt);
+
+      const mailResult = await sendCustomerMail({
+        toEmail: user.email,
+        subject: PASSWORD_RESET_EMAIL.subject,
+        text: PASSWORD_RESET_EMAIL.body(buildResetPasswordUrl(resetToken)),
+      });
+      if (!mailResult.ok) {
+        console.warn(
+          `[auth/request-password-reset] mail not sent (${mailResult.error}) for customer=${customer.id}`
+        );
+      }
+    }
+
+    // 未登録のメールアドレスであっても同じ成功レスポンスを返し、登録有無を判別できないようにする
+    res.json({ ok: true });
+  } catch (err) {
+    console.error("[auth/request-password-reset] failed:", err);
+    res.status(500).json({ error: "internal_error" });
+  }
+});
+
+router.get("/api/auth/password-reset-info", async (req, res) => {
+  const { token } = req.query;
+  if (!token) {
+    return res.status(400).json({ error: "missing_token" });
+  }
+
+  try {
+    const found = await customerStore.findCustomerAndUserByResetToken(token);
+    if (!found) {
+      return res.status(404).json({ error: "invalid_token" });
+    }
+    const expiresAt = found.user.resetPasswordExpAt
+      ? new Date(found.user.resetPasswordExpAt).getTime()
+      : 0;
+    if (!expiresAt || expiresAt < Date.now()) {
+      return res.status(410).json({ error: "expired_token" });
+    }
+
+    res.json({ ok: true });
+  } catch (err) {
+    console.error("[auth/password-reset-info] failed:", err);
+    res.status(500).json({ error: "internal_error" });
+  }
+});
+
+router.post("/api/auth/reset-password", express.json(), async (req, res) => {
+  const { token, password } = req.body || {};
+  if (typeof token !== "string" || !token) {
+    return res.status(400).json({ error: "missing_token" });
+  }
+  if (!isValidPassword(password)) {
+    return res.status(400).json({ error: "invalid_password" });
+  }
+
+  try {
+    const found = await customerStore.findCustomerAndUserByResetToken(token);
+    if (!found) {
+      return res.status(404).json({ error: "invalid_token" });
+    }
+    const expiresAt = found.user.resetPasswordExpAt
+      ? new Date(found.user.resetPasswordExpAt).getTime()
+      : 0;
+    if (!expiresAt || expiresAt < Date.now()) {
+      return res.status(410).json({ error: "expired_token" });
+    }
+
+    const passwordHash = await bcrypt.hash(password, BCRYPT_ROUNDS);
+    // 使用済みトークンをクリアし、sessionVersionをインクリメントして
+    // 発行済みの全セッション（他デバイス・他ブラウザを含む）を無効化する
+    const updatedUser = await customerStore.resetPassword(found.customer.id, token, passwordHash);
+    if (!updatedUser) {
+      return res.status(404).json({ error: "invalid_token" });
+    }
+
+    res.json({ ok: true });
+  } catch (err) {
+    console.error("[auth/reset-password] failed:", err);
+    res.status(500).json({ error: "internal_error" });
+  }
+});
+
 router.post("/api/auth/login", express.json(), async (req, res) => {
   const { email, password } = req.body || {};
   if (!isValidEmail(email) || typeof password !== "string") {
@@ -229,11 +343,31 @@ router.post("/api/auth/logout", (req, res) => {
   res.json({ ok: true });
 });
 
-router.get("/api/auth/me", requireAuth, (req, res) => {
+// customer.stripeSubscriptionから次回請求日（current_period_end）を読み取るだけの
+// 参照専用ヘルパー。Stripe側への書き込みは一切行わない。取得できなくても
+// /api/auth/me全体を失敗させず、nextBillingDateをnullにするだけに留める。
+async function getNextBillingDate(customer) {
+  if (!customer.stripeSubscription) return null;
+  const stripe = getStripe();
+  if (!stripe) return null;
+  try {
+    const subscription = await stripe.subscriptions.retrieve(customer.stripeSubscription);
+    return subscription.current_period_end
+      ? new Date(subscription.current_period_end * 1000).toISOString()
+      : null;
+  } catch (err) {
+    console.error("[auth/me] failed to fetch next billing date:", err);
+    return null;
+  }
+}
+
+router.get("/api/auth/me", requireAuth, async (req, res) => {
   const store = loadStore();
   const connected = Object.keys(store[req.customer.id] || {});
+  const nextBillingDate = await getNextBillingDate(req.customer);
   res.json({
     ...safeCustomer(req.customer),
+    nextBillingDate,
     connectedPlatforms: connected,
     user: {
       email: req.user.email,

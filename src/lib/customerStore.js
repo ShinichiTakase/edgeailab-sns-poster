@@ -254,6 +254,62 @@ async function acceptInvitation(customerId, invitationToken, passwordHash) {
   return updatedUser;
 }
 
+/** パスワード再設定トークンに一致する users 要素を持つ顧客を探す */
+async function findCustomerAndUserByResetToken(token) {
+  const customers = await listAllCustomers();
+  for (const customer of customers) {
+    const user = (customer.users || []).find((u) => u.resetPasswordToken === token);
+    if (user) return { customer, user };
+  }
+  return null;
+}
+
+/**
+ * パスワード再設定トークンを発行する。同一ユーザーに対する既存トークンは
+ * このフィールドを上書きするだけで自動的に無効化される（トークンは常に1件のみ保持）。
+ */
+async function setPasswordResetToken(customerId, userId, resetToken, resetExpiresAt) {
+  const customer = await getCustomerById(customerId);
+  if (!customer) {
+    throw new Error(`[customerStore] setPasswordResetToken: customer not found id=${customerId}`);
+  }
+  const users = Array.isArray(customer.users) ? customer.users : [];
+  const index = users.findIndex((u) => u.userId === userId);
+  if (index === -1) {
+    throw new Error(`[customerStore] setPasswordResetToken: user not found userId=${userId}`);
+  }
+  const newUsers = [...users];
+  newUsers[index] = { ...users[index], resetPasswordToken: resetToken, resetPasswordExpAt: resetExpiresAt };
+  await updateCustomer(customerId, { users: newUsers });
+}
+
+/**
+ * 検証済みのパスワード再設定トークンをもとに新しいパスワードを設定する。
+ * 使用済みトークンはクリアして再利用を防ぎ、sessionVersionをインクリメントして
+ * 発行済みの全JWT（他デバイス・他ブラウザのログインセッションを含む）を無効化する。
+ */
+async function resetPassword(customerId, resetToken, passwordHash) {
+  const customer = await getCustomerById(customerId);
+  if (!customer) {
+    throw new Error(`[customerStore] resetPassword: customer not found id=${customerId}`);
+  }
+  const users = Array.isArray(customer.users) ? customer.users : [];
+  const index = users.findIndex((u) => u.resetPasswordToken === resetToken);
+  if (index === -1) return null;
+
+  const updatedUser = {
+    ...users[index],
+    passwordHash,
+    resetPasswordToken: "",
+    resetPasswordExpAt: "",
+    sessionVersion: (Number(users[index].sessionVersion) || 0) + 1,
+  };
+  const newUsers = [...users];
+  newUsers[index] = updatedUser;
+  await updateCustomer(customerId, { users: newUsers });
+  return updatedUser;
+}
+
 // トライアル終了後、支払い情報未登録のまま利用を続けようとしていないかの判定。
 // SNS連携開始前のガード（requireAuth.js の blockExpiredTrial）で使用する。
 function isTrialExpiredWithoutPayment(customer) {
@@ -319,6 +375,9 @@ module.exports = {
   listAllCustomers,
   findCustomerAndUserByEmail,
   findCustomerAndUserByInvitationToken,
+  findCustomerAndUserByResetToken,
+  setPasswordResetToken,
+  resetPassword,
   addInvitedUser,
   acceptInvitation,
 };

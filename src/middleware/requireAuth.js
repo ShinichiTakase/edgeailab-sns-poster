@@ -41,6 +41,11 @@ async function requireAuth(req, res, next) {
     if (!user) {
       return res.status(401).json({ error: "unauthenticated" });
     }
+    // パスワード再設定でsessionVersionがインクリメントされていたら、
+    // このJWTは旧セッションとして無効（全セッション無効化の実現手段）。
+    if ((payload.sessionVersion || 0) !== (user.sessionVersion || 0)) {
+      return res.status(401).json({ error: "unauthenticated" });
+    }
     req.customer = customer;
     req.user = user;
     next();

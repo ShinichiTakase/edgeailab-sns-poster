@@ -7,12 +7,18 @@ const EXPIRES_IN = "30d";
 
 // customers は1アカウントに複数ユーザー（users繰り返しフィールド）を持ちうるため、
 // セッションにはアカウント（customer.id）だけでなく、ログイン中の個人（user.userId）も入れる。
+// sessionVersion は users[].sessionVersion のスナップショット。パスワード再設定時に
+// users[].sessionVersion をインクリメントすることで、発行済みの全JWTを一括失効させる
+// （express-session等のサーバー側セッションストアを持たないステートレス方式のため、
+// 「全セッション無効化」はこのバージョン比較でしか実現できない）。
 function signSession(customer, user) {
   const secret = process.env.JWT_SECRET;
   if (!secret) throw new Error("JWT_SECRET が未設定です");
-  return jwt.sign({ sub: customer.id, userId: user.userId, email: user.email }, secret, {
-    expiresIn: EXPIRES_IN,
-  });
+  return jwt.sign(
+    { sub: customer.id, userId: user.userId, email: user.email, sessionVersion: user.sessionVersion || 0 },
+    secret,
+    { expiresIn: EXPIRES_IN }
+  );
 }
 
 function verifySession(token) {

@@ -51,4 +51,24 @@ const INVITATION_EMAIL = {
     ].join("\n"),
 };
 
-module.exports = { VERIFICATION_EMAIL, TRIAL_ENDING_EMAIL, INVITATION_EMAIL, planLabel };
+const PASSWORD_RESET_EMAIL = {
+  subject: "【EdgeAI Lab】パスワード再設定のご案内",
+  body: (resetUrl) =>
+    [
+      "パスワード再設定のリクエストを受け付けました。",
+      "",
+      "以下のリンクから新しいパスワードを設定してください。",
+      resetUrl,
+      "",
+      "このリンクの有効期限は1時間です。",
+      "心当たりがない場合は、本メールを破棄してください（パスワードは変更されません）。",
+    ].join("\n"),
+};
+
+module.exports = {
+  VERIFICATION_EMAIL,
+  TRIAL_ENDING_EMAIL,
+  INVITATION_EMAIL,
+  PASSWORD_RESET_EMAIL,
+  planLabel,
+};
