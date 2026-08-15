@@ -1,6 +1,6 @@
 const express = require("express");
 const crypto = require("crypto");
-const { savePlatformTokens, findDuplicateOwner } = require("../lib/tokenStore");
+const { savePlatformTokens, findDuplicateOwner, deletePlatformTokensByUserId } = require("../lib/tokenStore");
 const pkceStore = require("../lib/pkceStore");
 const { requireAuth, blockExpiredTrial } = require("../middleware/requireAuth");
 
@@ -104,13 +104,49 @@ router.post("/threads/deauthorize", express.urlencoded({ extended: false }), (re
 });
 
 router.post("/threads/data-deletion", express.urlencoded({ extended: false }), (req, res) => {
-  console.info("[threads/data-deletion] received:", req.body);
-  const confirmationCode = crypto.randomBytes(8).toString("hex");
-  res.json({
-    url: `https://edgeailab.net/threads/data-deletion?id=${confirmationCode}`,
-    confirmation_code: confirmationCode,
-  });
+  try {
+    const { signed_request: signedRequest } = req.body;
+    if (!signedRequest) {
+      return res.status(400).json({ error: "signed_request is missing" });
+    }
+
+    const payload = parseSignedRequest(signedRequest, process.env.THREADS_APP_SECRET);
+    const userId = payload.user_id;
+
+    const affectedSlugs = deletePlatformTokensByUserId("threads", userId);
+    console.info(
+      `[threads/data-deletion] user_id=${userId} removed from slugs=[${affectedSlugs.join(", ")}]`
+    );
+
+    const confirmationCode = crypto.randomBytes(8).toString("hex");
+    res.json({
+      url: `https://edgeailab.net/threads/data-deletion?id=${confirmationCode}`,
+      confirmation_code: confirmationCode,
+    });
+  } catch (err) {
+    console.error("[threads/data-deletion] failed:", err);
+    res.status(400).json({ error: "signed_request verification failed" });
+  }
 });
+
+function parseSignedRequest(signedRequest, appSecret) {
+  const [encodedSig, encodedPayload] = signedRequest.split(".");
+  if (!encodedSig || !encodedPayload) {
+    throw new Error("malformed signed_request");
+  }
+
+  const sig = Buffer.from(encodedSig.replace(/-/g, "+").replace(/_/g, "/"), "base64");
+  const expectedSig = crypto.createHmac("sha256", appSecret).update(encodedPayload).digest();
+
+  if (sig.length !== expectedSig.length || !crypto.timingSafeEqual(sig, expectedSig)) {
+    throw new Error("signed_request signature mismatch");
+  }
+
+  const decoded = Buffer.from(encodedPayload.replace(/-/g, "+").replace(/_/g, "/"), "base64").toString(
+    "utf-8"
+  );
+  return JSON.parse(decoded);
+}
 
 async function exchangeShortLivedToken(code) {
   const params = new URLSearchParams({
