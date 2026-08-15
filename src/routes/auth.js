@@ -8,6 +8,7 @@ const { signSession, setSessionCookie, clearSessionCookie } = require("../lib/jw
 const { requireAuth } = require("../middleware/requireAuth");
 const { loadStore } = require("../lib/tokenStore");
 const { getStripe } = require("../lib/stripeClient");
+const { planKey } = require("../lib/stripePricing");
 
 const router = express.Router();
 
@@ -51,7 +52,7 @@ function safeCustomer(customer) {
   return {
     email: customer.email,
     contactName: customer.contactName || null,
-    plan: Array.isArray(customer.plan) ? customer.plan[0] || null : customer.plan || null,
+    plan: planKey(customer),
     isVerified: Boolean(customer.isVerified),
     trialEndsAt: customer.trialEndsAt || null,
     status: Array.isArray(customer.status) ? customer.status[0] || null : customer.status || null,
