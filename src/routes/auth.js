@@ -343,15 +343,15 @@ router.post("/api/auth/logout", (req, res) => {
   res.json({ ok: true });
 });
 
-// customer.stripeSubscriptionから次回請求日（current_period_end）を読み取るだけの
+// customer.stripeSubscriptionIdから次回請求日（current_period_end）を読み取るだけの
 // 参照専用ヘルパー。Stripe側への書き込みは一切行わない。取得できなくても
 // /api/auth/me全体を失敗させず、nextBillingDateをnullにするだけに留める。
 async function getNextBillingDate(customer) {
-  if (!customer.stripeSubscription) return null;
+  if (!customer.stripeSubscriptionId) return null;
   const stripe = getStripe();
   if (!stripe) return null;
   try {
-    const subscription = await stripe.subscriptions.retrieve(customer.stripeSubscription);
+    const subscription = await stripe.subscriptions.retrieve(customer.stripeSubscriptionId);
     return subscription.current_period_end
       ? new Date(subscription.current_period_end * 1000).toISOString()
       : null;

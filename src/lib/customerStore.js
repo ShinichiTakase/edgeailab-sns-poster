@@ -317,7 +317,7 @@ function isTrialExpiredWithoutPayment(customer) {
   if (status !== "trial") return false;
   if (!customer.trialEndsAt) return false;
   if (new Date(customer.trialEndsAt).getTime() >= Date.now()) return false;
-  return !customer.stripeSubscription;
+  return !customer.stripeSubscriptionId;
 }
 
 // トライアル中の投稿数上限（全SNS合計）。実投稿エンドポイント実装時に、
@@ -366,6 +366,7 @@ module.exports = {
   getCustomerByVerificationToken,
   createCustomer,
   updateCustomer,
+  toPlanChoice,
   markVerified,
   isTrialExpiredWithoutPayment,
   TRIAL_POST_LIMIT,

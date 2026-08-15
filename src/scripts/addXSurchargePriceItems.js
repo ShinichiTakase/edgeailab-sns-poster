@@ -20,7 +20,7 @@ async function main() {
   }
 
   const customers = await customerStore.listAllCustomers();
-  const targets = customers.filter((c) => c.stripeSubscription && c.stripeCustomerId);
+  const targets = customers.filter((c) => c.stripeSubscriptionId && c.stripeCustomerId);
 
   console.info(
     `[x-surcharge-items] ${APPLY ? "APPLY" : "DRY-RUN"}モード。対象候補${targets.length}件（全customer${customers.length}件中）。`
@@ -41,7 +41,7 @@ async function main() {
 
     let items;
     try {
-      items = await stripe.subscriptionItems.list({ subscription: customer.stripeSubscription });
+      items = await stripe.subscriptionItems.list({ subscription: customer.stripeSubscriptionId });
     } catch (err) {
       console.error(`[x-surcharge-items] id=${customer.id} サブスクリプションitem取得失敗:`, err.message);
       failed++;
@@ -55,7 +55,7 @@ async function main() {
     }
 
     console.info(
-      `[x-surcharge-items] id=${customer.id} plan=${plan} subscription=${customer.stripeSubscription} にprice=${prices.meteredX} を追加${APPLY ? "します" : "する予定（dry-run）"}`
+      `[x-surcharge-items] id=${customer.id} plan=${plan} subscription=${customer.stripeSubscriptionId} にprice=${prices.meteredX} を追加${APPLY ? "します" : "する予定（dry-run）"}`
     );
 
     if (!APPLY) {
@@ -65,7 +65,7 @@ async function main() {
 
     try {
       await stripe.subscriptionItems.create({
-        subscription: customer.stripeSubscription,
+        subscription: customer.stripeSubscriptionId,
         price: prices.meteredX,
       });
       added++;
