@@ -46,6 +46,29 @@ router.post("/api/billing/create-checkout-session", requireAuth, express.json(),
       await customerStore.updateCustomer(req.customer.id, { stripeCustomerId });
     }
 
+    // trialEndsAtをStripeのtrial_endにそのまま設定する。これによりbilling_cycle_anchorが
+    // 自動的にtrial_endと同じ日付に設定され（Stripe公式ドキュメント「トライアル期間を使用した
+    // 請求期間の変更」参照。実際にテスト用subscriptionで検証済み: trial_end===billing_cycle_anchor）、
+    // 月末日のずれもStripe側で自動吸収される（例: アンカーが1/31なら2月は2/28
+    // （うるう年は2/29）、3月は3/31、4月は4/30。「存在しない場合は翌月に繰り越す」のではなく
+    // 「その月の最終日」になる点に注意。カスタムロジックの追加は不要）。
+    //
+    // trial_endは、Stripe Checkout（stripe.checkout.sessions.create）経由の場合
+    // 「現在時刻より2日以上先」である必要がある（実際にCheckout Session作成で検証済み。
+    // 生のSubscriptions APIなら60秒程度でも通るが、ここではCheckoutを使っているため
+    // Checkout側の制約に従う）。既にトライアル終了間際（2日未満）・終了済みの顧客が
+    // 今から決済登録する場合はtrial_endを設定せず、従来通り即時課金にフォールバックする
+    // （トライアル終了間際に決済登録した顧客は、最大で数日分早く課金される可能性が残る）。
+    const MIN_TRIAL_END_LEAD_SECONDS = 2 * 24 * 60 * 60 + 5 * 60; // 2日+5分（安全マージン）
+    const subscriptionData = {};
+    if (req.customer.trialEndsAt) {
+      const trialEndSeconds = Math.floor(new Date(req.customer.trialEndsAt).getTime() / 1000);
+      const nowSeconds = Math.floor(Date.now() / 1000);
+      if (trialEndSeconds > nowSeconds + MIN_TRIAL_END_LEAD_SECONDS) {
+        subscriptionData.trial_end = trialEndSeconds;
+      }
+    }
+
     const session = await stripe.checkout.sessions.create({
       mode: "subscription",
       customer: stripeCustomerId,
@@ -55,6 +78,7 @@ router.post("/api/billing/create-checkout-session", requireAuth, express.json(),
         { price: prices.metered },
         { price: prices.meteredX },
       ],
+      ...(Object.keys(subscriptionData).length > 0 ? { subscription_data: subscriptionData } : {}),
       success_url: `${base}/dashboard.html?billing=success`,
       cancel_url: `${base}/upgrade.html?billing=cancelled`,
     });
