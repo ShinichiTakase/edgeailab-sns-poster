@@ -243,7 +243,7 @@ router.get("/api/billing/upcoming", requireAuth, async (req, res) => {
       return res.json({ ...fromInvoice, isEstimate: true });
     }
 
-    const predicted = await predictFromScheduledPosts(stripe, req.customer.id, prices, parsed.year, parsed.month);
+    const predicted = await predictFromScheduledPosts(stripe, req.customer, prices, parsed.year, parsed.month);
     res.json({ ...predicted, isEstimate: true });
   } catch (err) {
     console.error(`[billing/upcoming] failed customerId=${req.customer.id}:`, err);
@@ -281,14 +281,49 @@ async function tryUpcomingInvoiceAmounts(stripe, customer, prices, year, month) 
   return { basicFee, usageFee, xSurcharge, total: basicFee + usageFee + xSurcharge };
 }
 
+// トライアル終了日（customer.trialEndsAt）の翌日を「本稼働開始日」とする。
+// この日を含む月が初回請求月（基本料金のみ）、以降は毎月請求される前提。
+// 実際のStripeサブスクリプションのbilling_cycle_anchor（日単位、月末日のずれ調整）までは
+// 再現せず、請求予測カードが元々カレンダー月単位で集計している都合に合わせ、
+// 「本稼働開始日が属する月」を基準にした月単位の近似とする。
+function getActivationYearMonth(customer) {
+  if (!customer.trialEndsAt) return null;
+  const trialEnd = new Date(customer.trialEndsAt);
+  const activation = new Date(trialEnd.getFullYear(), trialEnd.getMonth(), trialEnd.getDate() + 1);
+  return { year: activation.getFullYear(), month: activation.getMonth() + 1 };
+}
+
 // 実請求サイクル外の月は、scheduled_postsの予定件数をStripeのPrice tiers（単一の情報源）に
 // 当てはめて予測する。基本料金・従量単価をこのコードにハードコードしない。
-async function predictFromScheduledPosts(stripe, customerId, prices, year, month) {
+// トライアル中（本稼働開始日より前の月）は請求ゼロ、本稼働開始月は基本料金のみ、
+// それ以降は基本料金＋前月分の従量料金・Xサーチャージ（後払い方式）を予測する。
+async function predictFromScheduledPosts(stripe, customer, prices, year, month) {
+  const activation = getActivationYearMonth(customer);
+  if (activation) {
+    const targetKey = year * 12 + month;
+    const activationKey = activation.year * 12 + activation.month;
+
+    if (targetKey < activationKey) {
+      // トライアル期間中はまだ本稼働していないため請求は発生しない
+      return { basicFee: 0, usageFee: 0, xSurcharge: 0, total: 0 };
+    }
+    if (targetKey === activationKey) {
+      // 本稼働開始月の初回請求は基本料金のみ（従量分は翌月請求）
+      const basePrice = await stripe.prices.retrieve(prices.base);
+      const basicFee = basePrice.unit_amount || 0;
+      return { basicFee, usageFee: 0, xSurcharge: 0, total: basicFee };
+    }
+  }
+
+  // 2回目以降の請求（後払い）は、前月分の予定投稿件数から従量料金・Xサーチャージを予測する。
+  const prevMonth = month === 1 ? 12 : month - 1;
+  const prevYear = month === 1 ? year - 1 : year;
+
   const [basePrice, meteredPrice, meteredXPrice, summary] = await Promise.all([
     stripe.prices.retrieve(prices.base),
     stripe.prices.retrieve(prices.metered, { expand: ["tiers"] }),
     stripe.prices.retrieve(prices.meteredX, { expand: ["tiers"] }),
-    getScheduledPostsSummary(customerId, year, month),
+    getScheduledPostsSummary(customer.id, prevYear, prevMonth),
   ]);
 
   const basicFee = basePrice.unit_amount || 0;
