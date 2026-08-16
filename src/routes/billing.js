@@ -310,6 +310,9 @@ async function tryUpcomingInvoiceAmounts(stripe, customer, prices, year, month) 
 // 実際のStripeサブスクリプションのbilling_cycle_anchor（日単位、月末日のずれ調整）までは
 // 再現せず、請求予測カードが元々カレンダー月単位で集計している都合に合わせ、
 // 「本稼働開始日が属する月」を基準にした月単位の近似とする。
+// customer.trialEndsAtは「表向き」の日数より3日長い内部バッファ込みの値
+// （routes/auth.js の TRIAL_INTERNAL_BUFFER_DAYS 参照）。実際にStripeへ請求される
+// タイミングと一致させるため、ここでは意図的にそのまま（バッファ込みで）使う。
 function getActivationYearMonth(customer) {
   if (!customer.trialEndsAt) return null;
   const trialEnd = new Date(customer.trialEndsAt);

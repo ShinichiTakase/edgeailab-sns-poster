@@ -10,6 +10,12 @@ const { TRIAL_ENDING_EMAIL } = require("../lib/emailTemplates");
 const { logInfo, logWarn, logError } = require("../lib/logger").createLogger("trial-reminder.log");
 
 // トライアル残り3日以下になったタイミングで1回だけリマインドメールを送る。
+// customer.trialEndsAtは「表向き」の日数より3日長い内部バッファ込みの値
+// （routes/auth.js の TRIAL_INTERNAL_BUFFER_DAYS 参照）。このcronはそれをそのまま使うため、
+// 実際にメールが飛ぶのは「表向きの終了日（trialEndsAt-3日）の当日〜3日後」の間になる
+// （このREMINDER_WINDOW_DAYS=3の値と内部バッファの3日は別々の設定であり、
+// たまたま同じ日数なだけで意図的に連動させているわけではない。どちらかを
+// 変更する際は、もう一方の値・このコメントも見直すこと）。
 const REMINDER_WINDOW_DAYS = 3;
 
 function daysLeft(trialEndsAt) {

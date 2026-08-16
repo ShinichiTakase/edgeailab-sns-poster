@@ -14,7 +14,23 @@ const router = express.Router();
 
 const VALID_PLANS = ["basic", "standard", "advanced"];
 const VERIFICATION_TOKEN_TTL_MS = 24 * 60 * 60 * 1000;
+// TRIAL_DAYS: 顧客に案内・表示する「表向き」のトライアル日数。
+// TRIAL_INTERNAL_BUFFER_DAYS: customers.trialEndsAt（DB上の内部値）に上乗せする日数。
+//
+// customers.trialEndsAt は「表向き30日」ではなく、常に TRIAL_DAYS + TRIAL_INTERNAL_BUFFER_DAYS
+// （= 33日）後の日時が入る。理由: Stripe Checkout Sessionのsubscription_data.trial_endは
+// 「現在時刻より2日超先」が必須という制約があり（billing.js参照、実測済み）、表向き30日
+// ぎりぎりに決済登録されるとこの制約に抵触し即時課金にフォールバックしてしまうため、
+// 常に3日超の余裕を内部的に確保している。
+//
+// アクセス制御（customerStore.isTrialExpiredWithoutPayment）・請求予測
+// （billing.js の predictFromScheduledPosts / getActivationYearMonth）・トライアル終了
+// リマインドcron（trialReminderCheck.js）・Stripe Checkoutのtrial_end設定は、
+// このバッファ込みのtrialEndsAtをそのまま使う（変更不要）。
+// ダッシュボード等の「残り◯日」カウントダウン表示のみ、safeCustomer()が返す
+// trialDisplayEndsAt（バッファを差し引いた「表向き」の終了日時）を使うこと。
 const TRIAL_DAYS = 30;
+const TRIAL_INTERNAL_BUFFER_DAYS = 3;
 const BCRYPT_ROUNDS = 12;
 const RESEND_MIN_INTERVAL_MS = 60 * 1000;
 const PASSWORD_RESET_TOKEN_TTL_MS = 60 * 60 * 1000;
@@ -49,12 +65,19 @@ function buildResetPasswordUrl(token) {
 }
 
 function safeCustomer(customer) {
+  const trialEndsAt = customer.trialEndsAt || null;
   return {
     email: customer.email,
     contactName: customer.contactName || null,
     plan: planKey(customer),
     isVerified: Boolean(customer.isVerified),
-    trialEndsAt: customer.trialEndsAt || null,
+    // trialEndsAt: DB上の内部値（表向きより3日長い。TRIAL_INTERNAL_BUFFER_DAYS参照）。
+    // アクセス制御等と同じ値を見たい場合のみ使う。
+    trialEndsAt,
+    // trialDisplayEndsAt: 「残り◯日」等の画面表示専用。バッファを差し引いた表向きの終了日時。
+    trialDisplayEndsAt: trialEndsAt
+      ? new Date(new Date(trialEndsAt).getTime() - TRIAL_INTERNAL_BUFFER_DAYS * 24 * 60 * 60 * 1000).toISOString()
+      : null,
     status: Array.isArray(customer.status) ? customer.status[0] || null : customer.status || null,
   };
 }
@@ -102,7 +125,9 @@ router.post("/api/auth/signup", express.json(), async (req, res) => {
     const passwordHash = await bcrypt.hash(password, BCRYPT_ROUNDS);
     const verificationToken = crypto.randomBytes(32).toString("hex");
     const verifyExpiresAt = new Date(Date.now() + VERIFICATION_TOKEN_TTL_MS).toISOString();
-    const trialEndsAt = new Date(Date.now() + TRIAL_DAYS * 24 * 60 * 60 * 1000).toISOString();
+    const trialEndsAt = new Date(
+      Date.now() + (TRIAL_DAYS + TRIAL_INTERNAL_BUFFER_DAYS) * 24 * 60 * 60 * 1000
+    ).toISOString();
 
     const customerParams = {
       email,

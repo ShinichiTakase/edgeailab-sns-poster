@@ -14,6 +14,20 @@
 3. `docker compose up -d sns-poster`
 4. 動作確認（`docker compose logs -f sns-poster`）
 
+## トライアル期間（内部値と表示値の分離）
+`customers.trialEndsAt`（DB上の値）は、顧客に案内する「表向き30日」ではなく
+**33日**（30日 + 3日の内部バッファ）で設定される（[src/routes/auth.js](src/routes/auth.js)の
+`TRIAL_DAYS`・`TRIAL_INTERNAL_BUFFER_DAYS`参照）。表向き30日ぎりぎりに決済登録すると
+Stripe Checkout Sessionの`trial_end`制約（現在時刻より2日超先が必須、実測済み）に
+抵触してしまうため、常に3日超の余裕を内部的に確保している。
+
+アクセス制御・請求予測（`billing.js`）・トライアル終了リマインドcron・Stripe
+Checkoutの`trial_end`設定は、この33日基準のtrialEndsAtをそのまま使う（意図した挙動）。
+ダッシュボード等の「残り◯日」表示だけは、`GET /api/auth/me`が返す
+`trialDisplayEndsAt`（バッファを差し引いた表向きの終了日時）を使うこと。
+サポート対応時にDB上の値を見て「30日のはずなのに33日になっている」と
+混乱しないよう、この関係性を覚えておくこと。
+
 ## データ永続化
 `json/client_tokens.json` はクライアントごとのSNSトークン置き場。
 クライアント数が増えたらDB移行を検討する前提の暫定実装（[src/lib/tokenStore.js](src/lib/tokenStore.js)参照）。

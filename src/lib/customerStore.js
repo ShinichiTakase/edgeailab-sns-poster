@@ -358,6 +358,8 @@ async function changePassword(customerId, userId, passwordHash) {
 
 // トライアル終了後、支払い情報未登録のまま利用を続けようとしていないかの判定。
 // SNS連携開始前のガード（requireAuth.js の blockExpiredTrial）で使用する。
+// customer.trialEndsAtは「表向き」の日数より3日長い内部バッファ込みの値
+// （routes/auth.js の TRIAL_INTERNAL_BUFFER_DAYS 参照）。ここでは意図的にそのまま使う。
 function isTrialExpiredWithoutPayment(customer) {
   const status = Array.isArray(customer.status) ? customer.status[0] : customer.status;
   if (status !== "trial") return false;
