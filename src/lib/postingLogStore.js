@@ -3,7 +3,9 @@
 // 読み出し時はArray.isArrayで防御的に読む（customerStore.jsの既存慣習に合わせる）。
 const { microcmsFetch } = require("./microcms");
 
-const PLATFORM_LABELS = { x: "X", threads: "Threads", facebook: "Facebook", instagram: "Instagram" };
+// microCMSのselectフィールド側の有効値は小文字のキーそのもの（"X"等の大文字表示ラベルは
+// 無効値としてエラーなく空配列に落とされるため注意。実測で確認済み）。
+const PLATFORM_LABELS = { x: "x", threads: "threads", facebook: "facebook", instagram: "instagram" };
 
 function toBillingPeriod(year, month) {
   return `${year}-${String(month).padStart(2, "0")}`;

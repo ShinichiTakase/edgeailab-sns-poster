@@ -5,7 +5,9 @@
 // （Array.isArrayで防御的に読む）。
 const { microcmsFetch } = require("./microcms");
 
-const PLATFORM_LABELS = { x: "X", threads: "Threads", facebook: "Facebook", instagram: "Instagram" };
+// microCMSのselectフィールド側の有効値は小文字のキーそのもの（"X"等の大文字表示ラベルは
+// 無効値としてエラーなく空配列に落とされるため注意。実測で確認済み）。
+const PLATFORM_LABELS = { x: "x", threads: "threads", facebook: "facebook", instagram: "instagram" };
 
 function monthRange(year, month) {
   const start = new Date(year, month - 1, 1);
