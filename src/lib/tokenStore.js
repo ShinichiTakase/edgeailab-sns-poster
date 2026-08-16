@@ -43,6 +43,25 @@ function deletePlatformTokensByUserId(platform, userId) {
   return affectedSlugs;
 }
 
+// 指定slugの現在の連携状況（プラットフォームキーの有無）を返す。存在しなければ空オブジェクト。
+function getConnectedEntry(slug) {
+  const store = loadStore();
+  return store[slug] || {};
+}
+
+// 指定slugの指定platformのトークンだけを削除する。同一slug内の他プラットフォームの
+// データは保持する（データ削除コールバックのdeletePlatformTokensByUserIdと同じ原則）。
+// user_id起点の同関数とは異なり、こちらはログイン中customerが自分自身の連携を
+// 解除する操作（POST /api/sns-connections/:platform/disconnect）で使う、slug起点の削除。
+function deletePlatformTokensBySlug(slug, platform) {
+  const store = loadStore();
+  if (!store[slug] || !store[slug][platform]) return false;
+  delete store[slug][platform];
+  if (Object.keys(store[slug]).length === 0) delete store[slug];
+  saveStore(store);
+  return true;
+}
+
 // 指定platformの識別子（x/threads/instagramはuser_id、facebookはpages[].pageId）が
 // 自分（excludeSlug）以外の既存slugで既に使われていないか横断検索する。
 // identifiersは常に配列（facebookは複数ページを一括チェックするため）。
@@ -68,6 +87,8 @@ module.exports = {
   loadStore,
   saveStore,
   savePlatformTokens,
+  getConnectedEntry,
+  deletePlatformTokensBySlug,
   deletePlatformTokensByUserId,
   findDuplicateOwner,
 };

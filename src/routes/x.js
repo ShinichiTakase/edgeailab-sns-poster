@@ -3,6 +3,7 @@ const crypto = require("crypto");
 const { savePlatformTokens, findDuplicateOwner, loadStore } = require("../lib/tokenStore");
 const pkceStore = require("../lib/pkceStore");
 const { requireAuth, blockExpiredTrial } = require("../middleware/requireAuth");
+const { requireSnsConnectionAvailable } = require("../middleware/snsConnectionGuard");
 const { reportMeterEvent } = require("../lib/meterEvents");
 
 const router = express.Router();
@@ -89,7 +90,7 @@ const TOKEN_URL = "https://api.x.com/2/oauth2/token";
 const USERS_ME_URL = "https://api.x.com/2/users/me";
 const SCOPE = "tweet.read tweet.write users.read offline.access";
 
-router.get("/oauth/x/authorize", requireAuth, blockExpiredTrial, (req, res) => {
+router.get("/oauth/x/authorize", requireAuth, blockExpiredTrial, requireSnsConnectionAvailable("x"), (req, res) => {
   const slug = req.customer.id;
 
   const codeVerifier = crypto.randomBytes(64).toString("base64url");

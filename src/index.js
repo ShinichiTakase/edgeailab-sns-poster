@@ -9,6 +9,7 @@ const instagramRoutes = require("./routes/instagram");
 const authRoutes = require("./routes/auth");
 const billingRoutes = require("./routes/billing");
 const teamRoutes = require("./routes/team");
+const snsConnectionsRoutes = require("./routes/snsConnections");
 const accountRoutes = require("./routes/account");
 
 const app = express();
@@ -19,6 +20,7 @@ app.use(instagramRoutes);
 app.use(authRoutes);
 app.use(billingRoutes);
 app.use(teamRoutes);
+app.use(snsConnectionsRoutes);
 app.use(accountRoutes);
 
 const port = process.env.PORT || 3000;

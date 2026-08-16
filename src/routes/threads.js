@@ -3,6 +3,7 @@ const crypto = require("crypto");
 const { savePlatformTokens, findDuplicateOwner, deletePlatformTokensByUserId } = require("../lib/tokenStore");
 const pkceStore = require("../lib/pkceStore");
 const { requireAuth, blockExpiredTrial } = require("../middleware/requireAuth");
+const { requireSnsConnectionAvailable } = require("../middleware/snsConnectionGuard");
 
 const router = express.Router();
 
@@ -33,7 +34,7 @@ const SCOPE = "threads_basic,threads_content_publish";
 
 // requireAuthでログイン中の顧客のみ開始でき、req.customer.id（microCMSの顧客レコードid）を
 // slug（json/client_tokens.jsonのキー）としてstateに紐付ける。Facebook/Instagramと同じ方式。
-router.get("/oauth/threads/start", requireAuth, blockExpiredTrial, (req, res) => {
+router.get("/oauth/threads/start", requireAuth, blockExpiredTrial, requireSnsConnectionAvailable("threads"), (req, res) => {
   const slug = req.customer.id;
   const state = crypto.randomBytes(24).toString("hex");
   pkceStore.put(state, { slug });

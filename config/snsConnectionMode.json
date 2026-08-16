@@ -1,0 +1,6 @@
+{
+  "facebook": { "mode": "dev", "allowedSlugs": ["biza3cp70"] },
+  "instagram": { "mode": "dev", "allowedSlugs": ["biza3cp70"] },
+  "threads": { "mode": "dev", "allowedSlugs": ["biza3cp70"] },
+  "x": { "mode": "live" }
+}
