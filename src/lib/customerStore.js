@@ -310,6 +310,78 @@ async function resetPassword(customerId, resetToken, passwordHash) {
   return updatedUser;
 }
 
+/**
+ * 解約済み（status: canceled）の既存customerレコードを、同一メールでの
+ * 再サインアップ時に新規レコードを作らず再アクティブ化する。
+ * 招待メンバー等の古いusersは破棄し、本人のみの新しいusers配列に置き換える
+ * （createCustomerの初期状態と揃える）。stripeCustomerIdは同一Stripe顧客を
+ * 使い回すためあえて上書きしない。stripeSubscriptionIdは解約済みの古い
+ * サブスクリプションを参照したままにならないようクリアする。
+ * @returns 更新後のレコード（idを含む）
+ */
+async function reactivateCustomer(id, {
+  email,
+  passwordHash,
+  plan,
+  contactName,
+  companyName,
+  verificationToken,
+  verifyExpiresAt,
+  trialEndsAt,
+}) {
+  await updateCustomer(id, {
+    email: email.trim(),
+    contactName: contactName.trim(),
+    companyName: (companyName || "").trim(),
+    status: ["trial"],
+    plan: [toPlanChoice(plan)],
+    isVerified: false,
+    verificationToken,
+    verifyExpiresAt,
+    trialEndsAt,
+    trialPostCount: 0,
+    trialReminderSent: false,
+    stripeSubscriptionId: "",
+    users: [
+      {
+        fieldId: "users",
+        userId: crypto.randomUUID(),
+        email: email.trim(),
+        passwordHash,
+        role: ["管理者"],
+      },
+    ],
+  });
+  return getCustomerById(id);
+}
+
+/**
+ * ログイン中の本人によるパスワード変更（トークンを介さない）。
+ * resetPasswordと同様にsessionVersionをインクリメントして他デバイス・他ブラウザの
+ * 既存セッションを無効化する。呼び出し側（ルートハンドラ）で、変更を行った
+ * このリクエスト自身のセッションだけは新しいsessionVersionで再発行すること。
+ */
+async function changePassword(customerId, userId, passwordHash) {
+  const customer = await getCustomerById(customerId);
+  if (!customer) {
+    throw new Error(`[customerStore] changePassword: customer not found id=${customerId}`);
+  }
+  const users = Array.isArray(customer.users) ? customer.users : [];
+  const index = users.findIndex((u) => u.userId === userId);
+  if (index === -1) {
+    throw new Error(`[customerStore] changePassword: user not found userId=${userId}`);
+  }
+  const updatedUser = {
+    ...users[index],
+    passwordHash,
+    sessionVersion: (Number(users[index].sessionVersion) || 0) + 1,
+  };
+  const newUsers = [...users];
+  newUsers[index] = updatedUser;
+  await updateCustomer(customerId, { users: newUsers });
+  return updatedUser;
+}
+
 // トライアル終了後、支払い情報未登録のまま利用を続けようとしていないかの判定。
 // SNS連携開始前のガード（requireAuth.js の blockExpiredTrial）で使用する。
 function isTrialExpiredWithoutPayment(customer) {
@@ -365,9 +437,11 @@ module.exports = {
   getCustomerById,
   getCustomerByVerificationToken,
   createCustomer,
+  reactivateCustomer,
   updateCustomer,
   toPlanChoice,
   markVerified,
+  changePassword,
   isTrialExpiredWithoutPayment,
   TRIAL_POST_LIMIT,
   getTrialPostCount,

@@ -1,0 +1,116 @@
+// アカウント解約（プロフィールメニュー「解約」）。
+// customersレコードは削除せずstatusを"canceled"に変更するだけに留める
+// （同一emailでの再サインアップ時にcustomerStore.reactivateCustomerで再利用するため）。
+const express = require("express");
+const customerStore = require("../lib/customerStore");
+const { requireAuth } = require("../middleware/requireAuth");
+const { clearSessionCookie } = require("../lib/jwt");
+const { getConnectedEntry, deletePlatformTokensBySlug } = require("../lib/tokenStore");
+const { getStripe } = require("../lib/stripeClient");
+const { notifyFailure } = require("../lib/mailer");
+
+const router = express.Router();
+
+const PLATFORMS = ["facebook", "instagram", "threads", "x"];
+
+function currentUserRole(user) {
+  return Array.isArray(user.role) ? user.role[0] : user.role;
+}
+
+// 予約投稿・定期実行cronの削除。継続投稿・予約投稿機能自体が未実装のため、
+// 現時点で実際に削除すべきジョブは存在しないはずだが、将来の実装漏れに備えて
+// 解約フローに雛形として組み込んでおく。投稿機能実装時はここに削除処理を追加すること
+// （実行直前のcustomer.status確認によるガード＝requireAuth.jsのblockCanceledCustomerと
+// 二重の安全策になる想定）。
+async function cancelScheduledJobsForCustomer(customerId) {
+  // TODO: 継続投稿・予約投稿機能の実装時、該当customerIdの予約投稿・cronジョブを
+  // ここで削除する処理を追加する。
+}
+
+router.post("/api/account/cancel", requireAuth, async (req, res) => {
+  // アカウント全体（サブスクリプション・全メンバーのSNS連携）に影響する操作のため、
+  // team.jsのメンバー招待と同様に管理者のみ実行できるようにする。
+  if (currentUserRole(req.user) !== "管理者") {
+    return res.status(403).json({ error: "forbidden", message: "解約はアカウント管理者のみ実行できます。" });
+  }
+
+  const customer = req.customer;
+
+  try {
+    if (customer.stripeSubscriptionId) {
+      const stripe = getStripe();
+      if (stripe) {
+        try {
+          await stripe.subscriptions.cancel(customer.stripeSubscriptionId);
+        } catch (err) {
+          console.error(
+            `[account/cancel] Stripe subscription cancel failed customerId=${customer.id} subscriptionId=${customer.stripeSubscriptionId}:`,
+            err
+          );
+          // Stripe側の失敗で解約導線全体を止めない（顧客からは解約済みに見えるべき）。
+          // customers.statusの更新は継続し、運用側はこの通知メールを見て
+          // Stripe管理画面で個別にサブスクリプションを解約する。
+          await notifyFailure(
+            "[edgeailab] 解約処理でStripe連携エラー",
+            [
+              `customerId: ${customer.id}`,
+              `email: ${customer.email}`,
+              `stripeSubscriptionId: ${customer.stripeSubscriptionId}`,
+              `エラー: ${err.message}`,
+              "",
+              "customers.statusはcanceledに更新されますが、Stripe側のサブスクリプションが",
+              "解約されずに残っています。Stripe管理画面で手動解約してください。",
+            ].join("\n")
+          );
+        }
+      } else {
+        console.error(
+          `[account/cancel] Stripe not configured, could not cancel subscription customerId=${customer.id}`
+        );
+        await notifyFailure(
+          "[edgeailab] 解約処理でStripe連携エラー",
+          [
+            `customerId: ${customer.id}`,
+            `email: ${customer.email}`,
+            `stripeSubscriptionId: ${customer.stripeSubscriptionId}`,
+            "エラー: STRIPE_SECRET_KEYが未設定のためStripe側のサブスクリプションを解約できませんでした。",
+            "",
+            "customers.statusはcanceledに更新されますが、Stripe側のサブスクリプションが",
+            "解約されずに残っています。Stripe管理画面で手動解約してください。",
+          ].join("\n")
+        );
+      }
+    }
+
+    const entry = getConnectedEntry(customer.id);
+    for (const platform of PLATFORMS) {
+      if (entry[platform]) {
+        deletePlatformTokensBySlug(customer.id, platform);
+      }
+    }
+
+    await cancelScheduledJobsForCustomer(customer.id);
+
+    // clearSessionCookieはブラウザにCookie削除を指示するだけでJWT自体は失効させないため、
+    // resetPassword/changePasswordと同様にusers[].sessionVersionを全員分インクリメントし、
+    // 発行済みの全セッション（本人・招待メンバー全員、他デバイス・他ブラウザ含む）を
+    // サーバー側でも無効化する。これが無いと、解約後も既存のセッショントークンを
+    // 使い回すことで認証済みAPIを叩き続けられてしまう。
+    const invalidatedUsers = (customer.users || []).map((u) => ({
+      ...u,
+      sessionVersion: (Number(u.sessionVersion) || 0) + 1,
+    }));
+    await customerStore.updateCustomer(customer.id, {
+      status: ["canceled"],
+      users: invalidatedUsers,
+    });
+
+    clearSessionCookie(res);
+    res.json({ ok: true });
+  } catch (err) {
+    console.error(`[account/cancel] failed customerId=${customer.id}:`, err);
+    res.status(500).json({ error: "internal_error", message: "解約処理に失敗しました。しばらくしてから再度お試しください。" });
+  }
+});
+
+module.exports = router;

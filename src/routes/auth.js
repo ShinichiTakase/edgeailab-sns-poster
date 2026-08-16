@@ -88,7 +88,14 @@ router.post("/api/auth/signup", express.json(), async (req, res) => {
 
   try {
     const existing = await customerStore.getCustomerByEmail(email);
-    if (existing) {
+    // 解約済み（status: canceled）でなければ通常どおり重複拒否。canceledの場合のみ、
+    // 新規レコードを作らずreactivateCustomerで既存レコードを再アクティブ化する
+    // （解約→同一メールで再サインアップした際に無料トライアルを再取得できてしまう
+    // 抜け穴を塞ぎつつ、正規の再契約は妨げないための分岐）。
+    const existingStatus = existing
+      ? (Array.isArray(existing.status) ? existing.status[0] : existing.status)
+      : null;
+    if (existing && existingStatus !== "canceled") {
       return res.status(409).json({ error: "email_exists" });
     }
 
@@ -97,7 +104,7 @@ router.post("/api/auth/signup", express.json(), async (req, res) => {
     const verifyExpiresAt = new Date(Date.now() + VERIFICATION_TOKEN_TTL_MS).toISOString();
     const trialEndsAt = new Date(Date.now() + TRIAL_DAYS * 24 * 60 * 60 * 1000).toISOString();
 
-    const customer = await customerStore.createCustomer({
+    const customerParams = {
       email,
       passwordHash,
       plan: normalizedPlan,
@@ -106,7 +113,10 @@ router.post("/api/auth/signup", express.json(), async (req, res) => {
       verificationToken,
       verifyExpiresAt,
       trialEndsAt,
-    });
+    };
+    const customer = existing
+      ? await customerStore.reactivateCustomer(existing.id, customerParams)
+      : await customerStore.createCustomer(customerParams);
 
     const mailResult = await sendCustomerMail({
       toEmail: customer.email,
@@ -342,6 +352,44 @@ router.post("/api/auth/login", express.json(), async (req, res) => {
 router.post("/api/auth/logout", (req, res) => {
   clearSessionCookie(res);
   res.json({ ok: true });
+});
+
+// ログイン中の本人によるパスワード変更。現在のパスワード検証・新パスワードの
+// ポリシー適合・確認用との一致は、フロント側のチェックリスト表示を信用せず
+// 必ずここでも再検証する。
+router.post("/api/auth/change-password", requireAuth, express.json(), async (req, res) => {
+  const { currentPassword, newPassword, newPasswordConfirm } = req.body || {};
+  if (typeof currentPassword !== "string" || !currentPassword) {
+    return res.status(400).json({ error: "invalid_current_password" });
+  }
+  if (!isValidPassword(newPassword)) {
+    return res.status(400).json({ error: "invalid_password" });
+  }
+  if (newPassword !== newPasswordConfirm) {
+    return res.status(400).json({ error: "password_mismatch" });
+  }
+
+  try {
+    const match = await bcrypt.compare(currentPassword, req.user.passwordHash || "");
+    if (!match) {
+      return res.status(400).json({ error: "invalid_current_password" });
+    }
+
+    const passwordHash = await bcrypt.hash(newPassword, BCRYPT_ROUNDS);
+    // sessionVersionのインクリメントで他デバイス・他ブラウザの既存セッションは無効化しつつ、
+    // 変更を行った今回のリクエスト自身のセッションだけは新しいsessionVersionで再発行し、
+    // 変更直後にログアウトさせない（設定画面からの変更なので、既存のパスワード再設定
+    // フロー＝未ログイン状態からの再設定とは異なりセッション継続を優先する）。
+    const updatedUser = await customerStore.changePassword(req.customer.id, req.user.userId, passwordHash);
+
+    const sessionToken = signSession(req.customer, updatedUser);
+    setSessionCookie(res, sessionToken);
+
+    res.json({ ok: true });
+  } catch (err) {
+    console.error("[auth/change-password] failed:", err);
+    res.status(500).json({ error: "internal_error" });
+  }
 });
 
 // customer.stripeSubscriptionIdから次回請求日（current_period_end）を読み取るだけの

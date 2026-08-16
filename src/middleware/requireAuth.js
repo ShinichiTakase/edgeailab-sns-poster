@@ -91,11 +91,27 @@ function requireUnderTrialPostLimit(req, res, next) {
   next();
 }
 
+// 実投稿エンドポイント実装時に requireAuth・requireVerified・
+// requireUnderTrialPostLimit と並べて組み込む想定のミドルウェア（設計のみ。
+// 現時点ではどのルートにも未接続）。ワンショット投稿・継続投稿の実行部分は
+// このガードを必ず組み込むこと。解約時にcustomer.statusをcanceledへ変更する
+// 処理（routes/account.js）と、解約時に予約投稿・cronを削除する処理
+// （同ファイルのcancelScheduledJobsForCustomer、現状は雛形）の実装漏れに対する
+// 保険であり、両方が働いても問題ない。
+function blockCanceledCustomer(req, res, next) {
+  const status = Array.isArray(req.customer.status) ? req.customer.status[0] : req.customer.status;
+  if (status === "canceled") {
+    return res.status(403).json({ error: "account_canceled", message: "このアカウントは解約済みです" });
+  }
+  next();
+}
+
 module.exports = {
   requireAuth,
   requireVerified,
   blockExpiredTrial,
   requireUnderTrialPostLimit,
+  blockCanceledCustomer,
   readSessionToken,
   parseCookieHeader,
 };
