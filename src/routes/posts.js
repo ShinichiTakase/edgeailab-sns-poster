@@ -9,6 +9,8 @@ const {
 const { loadStore } = require("../lib/tokenStore");
 const { reportMeterEvent } = require("../lib/meterEvents");
 const { createPostingLog, getPostStatsForCustomer } = require("../lib/postingLogStore");
+const { getScheduledPostsSummary } = require("../lib/scheduledPostStore");
+const { parseMonthParam, isPastMonth } = require("../lib/monthParam");
 const { updateCustomer, getTrialPostCount } = require("../lib/customerStore");
 const xPoster = require("../lib/xPoster");
 const facebookPoster = require("../lib/facebookPoster");
@@ -142,6 +144,27 @@ router.get("/api/posts/stats", requireAuth, async (req, res) => {
     res.json(counts);
   } catch (err) {
     console.error(`[posts/stats] failed customerId=${req.customer.id}:`, err);
+    res.status(500).json({ error: "internal_error" });
+  }
+});
+
+// customerIdはクエリパラメータではなく、他の /api/posts/* 同様requireAuthが設定する
+// req.customer.id（認証済み本人のみ）を使う。クライアント指定のcustomerIdをそのまま
+// 信用すると他customerのデータを覗けてしまう（IDOR）ため、既存エンドポイントの
+// セキュリティ方針に合わせている。
+router.get("/api/posts/scheduled", requireAuth, async (req, res) => {
+  const parsed = parseMonthParam(req.query.month);
+  if (!parsed) {
+    return res.status(400).json({ error: "invalid_month" });
+  }
+  if (isPastMonth(parsed.year, parsed.month)) {
+    return res.status(400).json({ error: "month_in_past" });
+  }
+  try {
+    const summary = await getScheduledPostsSummary(req.customer.id, parsed.year, parsed.month);
+    res.json(summary.counts);
+  } catch (err) {
+    console.error(`[posts/scheduled] failed customerId=${req.customer.id}:`, err);
     res.status(500).json({ error: "internal_error" });
   }
 });

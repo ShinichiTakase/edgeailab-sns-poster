@@ -4,6 +4,9 @@ const { requireAuth } = require("../middleware/requireAuth");
 const { getXSurcharge } = require("../lib/surchargeConfig");
 const { getStripe } = require("../lib/stripeClient");
 const { planKey, pricesForPlan } = require("../lib/stripePricing");
+const { computeGraduatedAmount } = require("../lib/stripeTierPricing");
+const { getScheduledPostsSummary } = require("../lib/scheduledPostStore");
+const { parseMonthParam, isPastMonth } = require("../lib/monthParam");
 
 const router = express.Router();
 
@@ -210,5 +213,88 @@ router.post("/api/billing/webhook", express.raw({ type: "application/json" }), a
     res.status(500).send("internal error");
   }
 });
+
+// customerIdはクエリパラメータではなく、他のbilling系エンドポイント同様
+// requireAuthが設定するreq.customer.id（認証済み本人のみ）を使う（IDOR対策）。
+router.get("/api/billing/upcoming", requireAuth, async (req, res) => {
+  const parsed = parseMonthParam(req.query.month);
+  if (!parsed) {
+    return res.status(400).json({ error: "invalid_month" });
+  }
+  if (isPastMonth(parsed.year, parsed.month)) {
+    return res.status(400).json({ error: "month_in_past" });
+  }
+
+  const stripe = getStripe();
+  if (!stripe) {
+    return res.status(500).json({ error: "stripe_not_configured" });
+  }
+
+  const plan = planKey(req.customer);
+  const prices = pricesForPlan(plan);
+  if (!prices || !prices.base || !prices.metered || !prices.meteredX) {
+    console.error(`[billing/upcoming] price not configured for plan=${JSON.stringify(req.customer.plan)}`);
+    return res.status(500).json({ error: "plan_not_configured" });
+  }
+
+  try {
+    const fromInvoice = await tryUpcomingInvoiceAmounts(stripe, req.customer, prices, parsed.year, parsed.month);
+    if (fromInvoice) {
+      return res.json({ ...fromInvoice, isEstimate: true });
+    }
+
+    const predicted = await predictFromScheduledPosts(stripe, req.customer.id, prices, parsed.year, parsed.month);
+    res.json({ ...predicted, isEstimate: true });
+  } catch (err) {
+    console.error(`[billing/upcoming] failed customerId=${req.customer.id}:`, err);
+    res.status(500).json({ error: "internal_error" });
+  }
+});
+
+// Stripeのupcoming invoice previewが指定月の請求対象期間をカバーしていれば、
+// その明細行（Stripeが既に段階制課金込みで計算済みの実額に近い値）を集計して返す。
+// サブスクリプション未作成（トライアル中等）・対象期間外の場合はnullを返し、
+// predictFromScheduledPostsへフォールバックする。
+async function tryUpcomingInvoiceAmounts(stripe, customer, prices, year, month) {
+  if (!customer.stripeSubscriptionId) return null;
+
+  let preview;
+  try {
+    preview = await stripe.invoices.createPreview({ customer: customer.stripeCustomerId });
+  } catch (err) {
+    console.error(`[billing/upcoming] createPreview failed customerId=${customer.id}:`, err);
+    return null;
+  }
+
+  const monthStart = new Date(year, month - 1, 1).getTime() / 1000;
+  if (monthStart < preview.period_start || monthStart >= preview.period_end) return null;
+
+  let basicFee = 0;
+  let usageFee = 0;
+  let xSurcharge = 0;
+  for (const line of preview.lines.data) {
+    const priceId = line.price && line.price.id;
+    if (priceId === prices.base) basicFee += line.amount;
+    else if (priceId === prices.metered) usageFee += line.amount;
+    else if (priceId === prices.meteredX) xSurcharge += line.amount;
+  }
+  return { basicFee, usageFee, xSurcharge, total: basicFee + usageFee + xSurcharge };
+}
+
+// 実請求サイクル外の月は、scheduled_postsの予定件数をStripeのPrice tiers（単一の情報源）に
+// 当てはめて予測する。基本料金・従量単価をこのコードにハードコードしない。
+async function predictFromScheduledPosts(stripe, customerId, prices, year, month) {
+  const [basePrice, meteredPrice, meteredXPrice, summary] = await Promise.all([
+    stripe.prices.retrieve(prices.base),
+    stripe.prices.retrieve(prices.metered, { expand: ["tiers"] }),
+    stripe.prices.retrieve(prices.meteredX, { expand: ["tiers"] }),
+    getScheduledPostsSummary(customerId, year, month),
+  ]);
+
+  const basicFee = basePrice.unit_amount || 0;
+  const usageFee = computeGraduatedAmount(meteredPrice.tiers, summary.totalCount);
+  const xSurcharge = computeGraduatedAmount(meteredXPrice.tiers, summary.xUrlCount);
+  return { basicFee, usageFee, xSurcharge, total: basicFee + usageFee + xSurcharge };
+}
 
 module.exports = router;
