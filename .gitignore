@@ -1,3 +1,4 @@
 .env
 /json/
+/uploads/
 node_modules/

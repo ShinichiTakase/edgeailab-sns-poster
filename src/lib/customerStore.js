@@ -5,36 +5,10 @@
 // users 繰り返しフィールドにネストする設計。slugはコード側で自動生成し、
 // json/client_tokens.json のキーとして流用する。
 const crypto = require("crypto");
-
-function getBaseUrl() {
-  const domain = process.env.MICROCMS_SERVICE_DOMAIN;
-  if (!domain) return null;
-  return `https://${domain}.microcms.io/api/v1`;
-}
-
-function getApiKey() {
-  return process.env.MICROCMS_WRITE_API_KEY || process.env.MICROCMS_API_KEY;
-}
+const { microcmsFetch } = require("./microcms");
 
 function escFilterValue(v) {
   return encodeURIComponent(v);
-}
-
-async function microcmsFetch(pathAndQuery, options = {}) {
-  const base = getBaseUrl();
-  const key = getApiKey();
-  if (!base || !key) {
-    throw new Error("MICROCMS_SERVICE_DOMAIN または MICROCMS_API_KEY が未設定です");
-  }
-  const res = await fetch(`${base}${pathAndQuery}`, {
-    ...options,
-    headers: {
-      "X-MICROCMS-API-KEY": key,
-      ...(options.body ? { "Content-Type": "application/json" } : {}),
-      ...(options.headers || {}),
-    },
-  });
-  return res;
 }
 
 /** メールアドレスで顧客レコードを検索する（存在しなければnull） */

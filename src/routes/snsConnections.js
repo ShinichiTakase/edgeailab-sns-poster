@@ -37,6 +37,10 @@ router.get("/api/sns-connections", requireAuth, (req, res) => {
       connected,
       available: isPlatformAvailable(platform, customerId),
       ...(connected ? { accountName: accountNameFor(platform, tokenEntry) } : {}),
+      // facebookは複数ページを連携しうるため、ワンショット投稿の投稿先ページ選択用に一覧を返す。
+      ...(connected && platform === "facebook"
+        ? { pages: (tokenEntry.pages || []).map((p) => ({ pageId: p.pageId, pageName: p.pageName })) }
+        : {}),
     };
   }
 

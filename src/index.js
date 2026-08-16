@@ -11,8 +11,11 @@ const billingRoutes = require("./routes/billing");
 const teamRoutes = require("./routes/team");
 const snsConnectionsRoutes = require("./routes/snsConnections");
 const accountRoutes = require("./routes/account");
+const postsRoutes = require("./routes/posts");
+const uploadsRoutes = require("./routes/uploads");
 
 const app = express();
+app.use("/uploads", express.static(path.join(__dirname, "..", "uploads")));
 app.use(threadsRoutes);
 app.use(xRoutes);
 app.use(facebookRoutes);
@@ -22,6 +25,8 @@ app.use(billingRoutes);
 app.use(teamRoutes);
 app.use(snsConnectionsRoutes);
 app.use(accountRoutes);
+app.use(postsRoutes);
+app.use(uploadsRoutes);
 
 const port = process.env.PORT || 3000;
 app.listen(port, () => {

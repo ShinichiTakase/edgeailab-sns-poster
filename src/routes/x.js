@@ -1,67 +1,11 @@
 const express = require("express");
 const crypto = require("crypto");
-const { savePlatformTokens, findDuplicateOwner, loadStore } = require("../lib/tokenStore");
+const { savePlatformTokens, findDuplicateOwner } = require("../lib/tokenStore");
 const pkceStore = require("../lib/pkceStore");
 const { requireAuth, blockExpiredTrial } = require("../middleware/requireAuth");
 const { requireSnsConnectionAvailable } = require("../middleware/snsConnectionGuard");
-const { reportMeterEvent } = require("../lib/meterEvents");
 
 const router = express.Router();
-
-const TWEETS_URL = "https://api.x.com/2/tweets";
-// URLを含むX投稿のみXサーチャージ対象（誤検知を避けるためプロトコル省略記法は対象外）。
-const URL_PATTERN = /https?:\/\//;
-
-router.post("/api/x/post", requireAuth, blockExpiredTrial, express.json(), async (req, res) => {
-  const { text } = req.body || {};
-  if (typeof text !== "string" || !text.trim()) {
-    return res.status(400).json({ error: "text_required" });
-  }
-
-  const slug = req.customer.id;
-  const clientEntry = loadStore()[slug];
-  const xData = clientEntry && clientEntry.x;
-  if (!xData || !xData.access_token) {
-    return res.status(400).json({ error: "x_not_connected" });
-  }
-
-  let tweet;
-  try {
-    tweet = await postTweet(xData.access_token, text);
-  } catch (err) {
-    console.error(`[x/post] slug=${slug} failed:`, err);
-    return res.status(500).json({ error: "post_failed" });
-  }
-
-  // メーターイベント送信の失敗は投稿の成否に影響させない（投稿自体は既に成功しているため）。
-  try {
-    const stripeCustomerId = req.customer.stripeCustomerId;
-    await reportMeterEvent("post_created", stripeCustomerId);
-    if (URL_PATTERN.test(text)) {
-      await reportMeterEvent("x_surcharge_post", stripeCustomerId);
-    }
-  } catch (err) {
-    console.error(`[x/post] slug=${slug} meter event report failed:`, err);
-  }
-
-  res.json({ ok: true, id: tweet.data.id });
-});
-
-async function postTweet(accessToken, text) {
-  const res = await fetch(TWEETS_URL, {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${accessToken}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({ text }),
-  });
-  const json = await res.json();
-  if (!res.ok || json.errors) {
-    throw new Error(`tweet post failed: ${JSON.stringify(json)}`);
-  }
-  return json;
-}
 
 const SUCCESS_HTML = `<!doctype html>
 <html lang="ja"><head><meta charset="utf-8"><title>連携完了</title></head>
