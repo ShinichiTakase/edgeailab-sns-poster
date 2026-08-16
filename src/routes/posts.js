@@ -9,9 +9,9 @@ const {
 const { loadStore } = require("../lib/tokenStore");
 const { reportMeterEvent } = require("../lib/meterEvents");
 const { createPostingLog, getPostStatsForCustomer } = require("../lib/postingLogStore");
-const { getScheduledPostsSummary } = require("../lib/scheduledPostStore");
+const { getScheduledPostsSummary, createScheduledPost } = require("../lib/scheduledPostStore");
 const { parseMonthParam, isPastMonth } = require("../lib/monthParam");
-const { updateCustomer, getTrialPostCount } = require("../lib/customerStore");
+const { bumpTrialPostCount } = require("../lib/customerStore");
 const xPoster = require("../lib/xPoster");
 const facebookPoster = require("../lib/facebookPoster");
 const instagramPoster = require("../lib/instagramPoster");
@@ -42,6 +42,22 @@ async function postToPlatform(platform, entry, text, imageUrl, facebookPageId) {
   throw new Error(`unknown platform: ${platform}`);
 }
 
+// platforms/texts共通バリデーション。即時投稿・予約投稿の両方から使う。
+function validatePlatformsAndTexts(platforms, texts) {
+  if (!Array.isArray(platforms) || platforms.length === 0 || platforms.some((p) => !PLATFORMS.includes(p))) {
+    return "invalid_platforms";
+  }
+  if (typeof texts !== "object" || texts === null) {
+    return "texts_required";
+  }
+  for (const platform of platforms) {
+    if (typeof texts[platform] !== "string" || !texts[platform].trim()) {
+      return "text_required";
+    }
+  }
+  return null;
+}
+
 router.post(
   "/api/posts",
   requireAuth,
@@ -51,13 +67,11 @@ router.post(
   blockCanceledCustomer,
   express.json(),
   async (req, res) => {
-    const { platforms, text, imageUrl, facebookPageId } = req.body || {};
+    const { platforms, texts, imageUrl, facebookPageId } = req.body || {};
 
-    if (!Array.isArray(platforms) || platforms.length === 0 || platforms.some((p) => !PLATFORMS.includes(p))) {
-      return res.status(400).json({ error: "invalid_platforms" });
-    }
-    if (typeof text !== "string" || !text.trim()) {
-      return res.status(400).json({ error: "text_required" });
+    const validationError = validatePlatformsAndTexts(platforms, texts);
+    if (validationError) {
+      return res.status(400).json({ error: validationError });
     }
     if (platforms.includes("instagram") && !imageUrl) {
       return res.status(400).json({ error: "instagram_image_required" });
@@ -65,7 +79,6 @@ router.post(
 
     const customerId = req.customer.id;
     const store = loadStore()[customerId] || {};
-    const containsUrl = URL_PATTERN.test(text);
     const stripeCustomerId = req.customer.stripeCustomerId;
 
     const results = {};
@@ -77,6 +90,11 @@ router.post(
         results[platform] = { ok: false, error: "not_connected" };
         continue;
       }
+
+      const text = texts[platform];
+      // Xサーチャージ対象かどうかは、プラットフォームごとの実際の投稿文に対して判定する
+      // （SNSごとに文面が異なるため、共通の一括判定ではなく個別に判定する）。
+      const containsUrl = URL_PATTERN.test(text);
 
       let postResult;
       try {
@@ -118,14 +136,91 @@ router.post(
       results[platform] = { ok: true, id: postResult.id };
     }
 
-    // トライアル投稿数の加算はループ終了後に一度だけ行う。ループ内で都度
-    // incrementTrialPostCountを呼ぶと、req.customerの値が更新されないまま
-    // 同じ古い値+1を複数回書き込んでしまう（成功件数分が積み上がらない）ため。
+    // トライアル投稿数の加算はループ終了後に一度だけ行う（customerStore.bumpTrialPostCount参照）。
     if (successCount > 0) {
       try {
-        await updateCustomer(customerId, { trialPostCount: getTrialPostCount(req.customer) + successCount });
+        await bumpTrialPostCount(customerId, req.customer, successCount);
       } catch (err) {
         console.error(`[posts] trial post count update failed customerId=${customerId}:`, err);
+      }
+    }
+
+    res.json({ results });
+  }
+);
+
+// 予約投稿。実際の投稿・課金は行わず、scheduled_postsにstatus=pendingでレコードを作成するのみ
+// （予約投稿の実行エンジン＝cronはこのプロジェクトにまだ存在しない。予約時点でトライアル投稿数を
+// 消費する設計は、実行時カウントが技術的に不可能なための現実的な選択）。
+router.post(
+  "/api/posts/schedule",
+  requireAuth,
+  requireVerified,
+  blockExpiredTrial,
+  requireUnderTrialPostLimit,
+  blockCanceledCustomer,
+  express.json(),
+  async (req, res) => {
+    const { platforms, texts, imageUrl, facebookPageId, scheduledAt } = req.body || {};
+
+    const validationError = validatePlatformsAndTexts(platforms, texts);
+    if (validationError) {
+      return res.status(400).json({ error: validationError });
+    }
+    if (platforms.includes("instagram") && !imageUrl) {
+      return res.status(400).json({ error: "instagram_image_required" });
+    }
+    const scheduledDate = typeof scheduledAt === "string" ? new Date(scheduledAt) : null;
+    if (!scheduledDate || Number.isNaN(scheduledDate.getTime()) || scheduledDate.getTime() <= Date.now()) {
+      return res.status(400).json({ error: "invalid_scheduled_at" });
+    }
+
+    const customerId = req.customer.id;
+    const store = loadStore()[customerId] || {};
+
+    const results = {};
+    let successCount = 0;
+
+    for (const platform of platforms) {
+      if (!store[platform]) {
+        results[platform] = { ok: false, error: "not_connected" };
+        continue;
+      }
+      // facebookは複数ページ連携時にfacebookPageIdの指定が必要（即時投稿と同じ制約）。
+      if (platform === "facebook") {
+        const pages = store.facebook.pages || [];
+        const page = facebookPageId ? pages.find((p) => p.pageId === facebookPageId) : pages[0];
+        if (!page) {
+          results[platform] = { ok: false, error: "facebook_page_not_found" };
+          continue;
+        }
+      }
+
+      const text = texts[platform];
+      const containsUrl = URL_PATTERN.test(text);
+
+      try {
+        const created = await createScheduledPost({
+          customerCode: customerId,
+          createdBy: req.user.userId,
+          platform,
+          content: text,
+          scheduledAt: scheduledDate.toISOString(),
+          containsUrl,
+        });
+        successCount += 1;
+        results[platform] = { ok: true, scheduledPostId: created.id };
+      } catch (err) {
+        console.error(`[posts/schedule] platform=${platform} customerId=${customerId} failed:`, err);
+        results[platform] = { ok: false, error: "schedule_failed" };
+      }
+    }
+
+    if (successCount > 0) {
+      try {
+        await bumpTrialPostCount(customerId, req.customer, successCount);
+      } catch (err) {
+        console.error(`[posts/schedule] trial post count update failed customerId=${customerId}:`, err);
       }
     }
 

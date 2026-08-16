@@ -368,8 +368,8 @@ function isTrialExpiredWithoutPayment(customer) {
   return !customer.stripeSubscriptionId;
 }
 
-// トライアル中の投稿数上限（全SNS合計）。実投稿エンドポイント実装時に、
-// 成功した投稿ごとにincrementTrialPostCountを呼び出してカウントする想定。
+// トライアル中の投稿数上限（全SNS合計）。即時投稿（routes/posts.js）・予約投稿の
+// 両方でrequireUnderTrialPostLimitと組み合わせて使う。
 const TRIAL_POST_LIMIT = 60;
 
 function getTrialPostCount(customer) {
@@ -377,11 +377,14 @@ function getTrialPostCount(customer) {
   return Number.isFinite(value) ? value : 0;
 }
 
-// customers.trialPostCount フィールド（数値、未作成の場合はmicroCMS管理画面で
-// 追加が必要）をインクリメントする。呼び出し側で最新のcustomerを渡すこと。
-async function incrementTrialPostCount(customer) {
-  const next = getTrialPostCount(customer) + 1;
-  await updateCustomer(customer.id, { trialPostCount: next });
+// customers.trialPostCount フィールドをdelta件分だけ加算する。
+// ループ内で複数回呼ぶと「req.customerの値が更新されないまま同じ古い値+1を
+// 複数回書き込んでしまう」バグになるため、呼び出し側は成功件数を集計してから
+// 一度だけ呼ぶこと（delta<=0の場合は何もしない）。
+async function bumpTrialPostCount(customerId, currentCustomer, delta) {
+  if (delta <= 0) return getTrialPostCount(currentCustomer);
+  const next = getTrialPostCount(currentCustomer) + delta;
+  await updateCustomer(customerId, { trialPostCount: next });
   return next;
 }
 
@@ -421,7 +424,7 @@ module.exports = {
   isTrialExpiredWithoutPayment,
   TRIAL_POST_LIMIT,
   getTrialPostCount,
-  incrementTrialPostCount,
+  bumpTrialPostCount,
   listCustomersWithUpcomingTrialEnd,
   listAllCustomers,
   findCustomerAndUserByEmail,

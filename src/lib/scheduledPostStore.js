@@ -1,7 +1,8 @@
-// microCMS の scheduled_posts スキーマ（予約投稿）への読み取り専用アクセス。
-// 今回のスコープは「予定件数・請求予測の表示」のみで、予約投稿の作成・実行
-// （scheduled_postsへの書き込み・cronでの実投稿）は別タスク。
-// postingLogStore.jsと同様、selectフィールドは配列で返る前提でArray.isArrayで防御的に読む。
+// microCMS の scheduled_posts スキーマ（予約投稿）へのアクセス。
+// 予約の作成（ワンショット投稿ウィザードの「予約」）と、予定件数・請求予測表示用の
+// 集計読み取りの両方をここで扱う。実際に予約を投稿として実行するcronはまだ存在しない。
+// postingLogStore.jsと同様、selectフィールドは配列で書き込み・読み取りする
+// （Array.isArrayで防御的に読む）。
 const { microcmsFetch } = require("./microcms");
 
 const PLATFORM_LABELS = { x: "X", threads: "Threads", facebook: "Facebook", instagram: "Instagram" };
@@ -60,4 +61,35 @@ async function getScheduledPostsSummary(customerCode, year, month) {
   return { counts, xUrlCount, totalCount };
 }
 
-module.exports = { PLATFORM_LABELS, listPendingScheduledPosts, getScheduledPostsSummary };
+/**
+ * 予約投稿を1件作成する（status=pending）。実際の投稿・課金はここでは行わない。
+ * @param {string} customerCode microCMS顧客レコードid（req.customer.id）
+ * @param {string} createdBy 予約を作成したユーザーid（req.user.userId）
+ * @param {string} platform "x" | "threads" | "facebook" | "instagram"
+ */
+async function createScheduledPost({ customerCode, createdBy, platform, content, scheduledAt, containsUrl }) {
+  const res = await microcmsFetch(`/scheduled_posts`, {
+    method: "POST",
+    body: JSON.stringify({
+      customer_code: customerCode,
+      created_by: createdBy,
+      platform: [PLATFORM_LABELS[platform]],
+      content: content || "",
+      scheduled_at: scheduledAt,
+      status: ["pending"],
+      contains_url: Boolean(containsUrl),
+    }),
+  });
+  if (!res.ok) {
+    const text = await res.text().catch(() => "");
+    throw new Error(`[scheduledPostStore] createScheduledPost failed ${res.status} ${text.slice(0, 300)}`);
+  }
+  return res.json();
+}
+
+module.exports = {
+  PLATFORM_LABELS,
+  listPendingScheduledPosts,
+  getScheduledPostsSummary,
+  createScheduledPost,
+};

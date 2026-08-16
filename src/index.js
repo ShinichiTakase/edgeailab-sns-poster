@@ -13,6 +13,7 @@ const snsConnectionsRoutes = require("./routes/snsConnections");
 const accountRoutes = require("./routes/account");
 const postsRoutes = require("./routes/posts");
 const uploadsRoutes = require("./routes/uploads");
+const aiRoutes = require("./routes/ai");
 
 const app = express();
 app.use("/uploads", express.static(path.join(__dirname, "..", "uploads")));
@@ -27,6 +28,7 @@ app.use(snsConnectionsRoutes);
 app.use(accountRoutes);
 app.use(postsRoutes);
 app.use(uploadsRoutes);
+app.use(aiRoutes);
 
 const port = process.env.PORT || 3000;
 app.listen(port, () => {
