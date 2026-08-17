@@ -89,8 +89,9 @@ async function getScheduledPostsSummary(customerCode, year, month) {
  * @param {string} customerCode microCMS顧客レコードid（req.customer.id）
  * @param {string} createdBy 予約を作成したユーザーid（req.user.userId）
  * @param {string} platform "x" | "threads" | "facebook" | "instagram"
+ * @param {string} [imageUrl] Instagram投稿に必須の画像URL（他プラットフォームでは未使用）
  */
-async function createScheduledPost({ customerCode, createdBy, platform, content, scheduledAt, containsUrl }) {
+async function createScheduledPost({ customerCode, createdBy, platform, content, scheduledAt, containsUrl, imageUrl }) {
   const res = await microcmsFetch(`/scheduled_posts`, {
     method: "POST",
     body: JSON.stringify({
@@ -101,6 +102,7 @@ async function createScheduledPost({ customerCode, createdBy, platform, content,
       scheduled_at: scheduledAt,
       status: ["pending"],
       contains_url: Boolean(containsUrl),
+      image_url: imageUrl || "",
     }),
   });
   if (!res.ok) {
@@ -110,10 +112,55 @@ async function createScheduledPost({ customerCode, createdBy, platform, content,
   return res.json();
 }
 
+// SCOPE_CUTOFF_AT より前のscheduled_atを持つ予約は対象外にする（この実行エンジン導入前に
+// 作られた予約は「実際に実行される」という前提なしに作られたものが混在するため、
+// 導入後に新規作成された予約のみを自動実行の対象とする）。
+// created_by="test" は手動テストで作った投稿のため、誤って実SNSへ投稿しないよう常に除外する。
+async function listDuePendingScheduledPosts(cutoffIso) {
+  const nowIso = new Date().toISOString();
+  const filters = [
+    "status[equals]pending",
+    `scheduled_at[less_than]${encodeURIComponent(nowIso)}`,
+    `scheduled_at[greater_than]${encodeURIComponent(cutoffIso)}`,
+    "created_by[not_equals]test",
+  ].join("[and]");
+
+  const all = [];
+  const limit = 100;
+  let offset = 0;
+  for (;;) {
+    const res = await microcmsFetch(`/scheduled_posts?filters=${filters}&limit=${limit}&offset=${offset}`);
+    if (!res.ok) {
+      const text = await res.text().catch(() => "");
+      throw new Error(`[scheduledPostStore] listDuePendingScheduledPosts failed ${res.status} ${text.slice(0, 300)}`);
+    }
+    const json = await res.json();
+    const contents = Array.isArray(json.contents) ? json.contents : [];
+    all.push(...contents);
+    if (contents.length < limit) break;
+    offset += limit;
+  }
+  return all;
+}
+
+/** 実行結果を反映する。statusの有効な選択肢は"pending"/"done"/"failed"（microCMS側で定義済み）。 */
+async function markScheduledPostStatus(id, status) {
+  const res = await microcmsFetch(`/scheduled_posts/${id}`, {
+    method: "PATCH",
+    body: JSON.stringify({ status: [status] }),
+  });
+  if (!res.ok) {
+    const text = await res.text().catch(() => "");
+    throw new Error(`[scheduledPostStore] markScheduledPostStatus failed ${res.status} ${text.slice(0, 300)}`);
+  }
+}
+
 module.exports = {
   PLATFORM_LABELS,
   listPendingScheduledPosts,
   listAllScheduledPostsForCustomer,
+  listDuePendingScheduledPosts,
+  markScheduledPostStatus,
   getScheduledPostsSummary,
   createScheduledPost,
 };
