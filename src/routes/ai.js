@@ -1,5 +1,5 @@
 const express = require("express");
-const { requireAuth, requireVerified, blockExpiredTrial } = require("../middleware/requireAuth");
+const { requireAuth, blockExpiredTrial } = require("../middleware/requireAuth");
 const { generatePostCopy } = require("../lib/postCopyGenerator");
 const { fetchUrlText } = require("../lib/urlTextFetcher");
 
@@ -24,7 +24,8 @@ function handleGenerationError(res, err, logPrefix, customerId) {
 }
 
 // 原文（URL未使用）からAI文案生成。投稿自体ではないためトライアル投稿数上限は関係ない。
-router.post("/api/ai/generate-post", requireAuth, requireVerified, blockExpiredTrial, express.json(), async (req, res) => {
+// メール認証未完了でも文案作成自体は試せるようにする（ブロックするのは実際の投稿・予約のみ）。
+router.post("/api/ai/generate-post", requireAuth, blockExpiredTrial, express.json(), async (req, res) => {
   const { platforms, sourceText } = req.body || {};
   if (!validatePlatforms(platforms)) {
     return res.status(400).json({ error: "invalid_platforms" });
@@ -46,7 +47,6 @@ router.post("/api/ai/generate-post", requireAuth, requireVerified, blockExpiredT
 router.post(
   "/api/ai/generate-post-from-url",
   requireAuth,
-  requireVerified,
   blockExpiredTrial,
   express.json(),
   async (req, res) => {
