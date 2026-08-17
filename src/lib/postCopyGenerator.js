@@ -63,7 +63,11 @@ async function generatePostCopy({ sourceText, platforms, url }) {
   const response = await anthropic.messages.create(
     {
       model: MODEL,
-      max_tokens: 2048,
+      // Instagram単体（2200文字目安）だけでも出力が2000トークン超になり得るため、
+      // 4SNS同時選択でも打ち切られない余裕を持たせる（実測でmax_tokens:2048だと
+      // 複数SNS選択時にstop_reason:"max_tokens"で出力が途中で切れ、不完全なJSONに
+      // なってパースエラーになっていた）。
+      max_tokens: 4096,
       thinking: { type: "disabled" },
       output_config: {
         effort: "low",
@@ -79,6 +83,9 @@ async function generatePostCopy({ sourceText, platforms, url }) {
 
   if (response.stop_reason === "refusal") {
     throw new Error("ai_refusal");
+  }
+  if (response.stop_reason === "max_tokens") {
+    throw new Error("ai_output_truncated");
   }
   const textBlock = response.content.find((b) => b.type === "text");
   if (!textBlock) {

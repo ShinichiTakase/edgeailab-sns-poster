@@ -19,6 +19,9 @@ function handleGenerationError(res, err, logPrefix, customerId) {
   if (err.message === "ai_refusal") {
     return res.status(422).json({ error: "ai_refusal" });
   }
+  if (err.message === "ai_output_truncated") {
+    return res.status(422).json({ error: "ai_output_truncated" });
+  }
   console.error(`${logPrefix} customerId=${customerId} failed:`, err);
   return res.status(502).json({ error: "ai_generation_failed" });
 }
