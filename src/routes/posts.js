@@ -8,8 +8,16 @@ const {
 } = require("../middleware/requireAuth");
 const { loadStore } = require("../lib/tokenStore");
 const { reportMeterEvent } = require("../lib/meterEvents");
-const { createPostingLog, getPostStatsForCustomer } = require("../lib/postingLogStore");
-const { getScheduledPostsSummary, createScheduledPost } = require("../lib/scheduledPostStore");
+const {
+  createPostingLog,
+  getPostStatsForCustomer,
+  listAllPostingLogsForCustomer,
+} = require("../lib/postingLogStore");
+const {
+  getScheduledPostsSummary,
+  createScheduledPost,
+  listAllScheduledPostsForCustomer,
+} = require("../lib/scheduledPostStore");
 const { parseMonthParam, isPastMonth } = require("../lib/monthParam");
 const { bumpTrialPostCount } = require("../lib/customerStore");
 const xPoster = require("../lib/xPoster");
@@ -233,6 +241,62 @@ router.post(
     res.json({ results });
   }
 );
+
+const PLATFORM_DISPLAY_LABELS = { x: "X", threads: "Threads", facebook: "Facebook", instagram: "Instagram" };
+
+function platformDisplayLabel(value) {
+  const key = Array.isArray(value) ? value[0] : value;
+  return PLATFORM_DISPLAY_LABELS[key] || key || "";
+}
+
+// 投稿一覧画面用。即時投稿（posting_logs）と予約投稿（scheduled_posts）を横断して
+// 顧客自身の全件を返す（他customerのデータは返さない。IDOR対策はposts.js全体の方針に合わせる）。
+router.get("/api/posts/list", requireAuth, async (req, res) => {
+  const customerCode = req.customer.id;
+  const emailByUserId = new Map();
+  for (const user of req.customer.users || []) {
+    emailByUserId.set(user.userId, user.email);
+  }
+
+  try {
+    const [postingLogs, scheduledPosts] = await Promise.all([
+      listAllPostingLogsForCustomer(customerCode),
+      listAllScheduledPostsForCustomer(customerCode),
+    ]);
+
+    const rows = [];
+
+    for (const log of postingLogs) {
+      rows.push({
+        postDateTime: log.createdAt,
+        email: emailByUserId.get(log.created_by) || null,
+        platform: platformDisplayLabel(log.platform),
+        content: log.content || "",
+        scheduledAt: null,
+        completedAt: log.posted_at || log.createdAt,
+      });
+    }
+
+    for (const post of scheduledPosts) {
+      const status = Array.isArray(post.status) ? post.status[0] : post.status;
+      rows.push({
+        postDateTime: post.createdAt,
+        email: emailByUserId.get(post.created_by) || null,
+        platform: platformDisplayLabel(post.platform),
+        content: post.content || "",
+        scheduledAt: post.scheduled_at,
+        // pending以外（今後実行エンジンが対応した場合のposted/failed等）はupdatedAtを完了時刻とみなす。
+        completedAt: status === "pending" ? null : post.updatedAt,
+      });
+    }
+
+    rows.sort((a, b) => new Date(b.postDateTime) - new Date(a.postDateTime));
+    res.json({ rows });
+  } catch (err) {
+    console.error(`[posts/list] failed customerId=${customerCode}:`, err);
+    res.status(500).json({ error: "internal_error" });
+  }
+});
 
 router.get("/api/posts/stats", requireAuth, async (req, res) => {
   const year = Number(req.query.year);

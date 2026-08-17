@@ -65,6 +65,27 @@ async function listPostingLogsForCustomer(customerCode, billingPeriod) {
   return all;
 }
 
+/** 指定顧客の全期間のログを全件取得する（投稿一覧画面用。ページング） */
+async function listAllPostingLogsForCustomer(customerCode) {
+  const all = [];
+  const limit = 100;
+  let offset = 0;
+  const filters = `customer_code[equals]${encodeURIComponent(customerCode)}`;
+  for (;;) {
+    const res = await microcmsFetch(`/posting_logs?filters=${filters}&limit=${limit}&offset=${offset}`);
+    if (!res.ok) {
+      const text = await res.text().catch(() => "");
+      throw new Error(`[postingLogStore] listAllPostingLogsForCustomer failed ${res.status} ${text.slice(0, 300)}`);
+    }
+    const json = await res.json();
+    const contents = Array.isArray(json.contents) ? json.contents : [];
+    all.push(...contents);
+    if (contents.length < limit) break;
+    offset += limit;
+  }
+  return all;
+}
+
 /** プラットフォームごとの投稿件数を集計する（該当なしは0） */
 async function getPostStatsForCustomer(customerCode, year, month) {
   const billingPeriod = toBillingPeriod(year, month);
@@ -82,5 +103,6 @@ module.exports = {
   PLATFORM_LABELS,
   createPostingLog,
   listPostingLogsForCustomer,
+  listAllPostingLogsForCustomer,
   getPostStatsForCustomer,
 };

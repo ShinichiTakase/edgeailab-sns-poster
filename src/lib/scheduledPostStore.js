@@ -42,6 +42,27 @@ async function listPendingScheduledPosts(customerCode, year, month) {
   return all;
 }
 
+/** 指定顧客の全期間・全ステータスの予約投稿を全件取得する（投稿一覧画面用。ページング） */
+async function listAllScheduledPostsForCustomer(customerCode) {
+  const all = [];
+  const limit = 100;
+  let offset = 0;
+  const filters = `customer_code[equals]${encodeURIComponent(customerCode)}`;
+  for (;;) {
+    const res = await microcmsFetch(`/scheduled_posts?filters=${filters}&limit=${limit}&offset=${offset}`);
+    if (!res.ok) {
+      const text = await res.text().catch(() => "");
+      throw new Error(`[scheduledPostStore] listAllScheduledPostsForCustomer failed ${res.status} ${text.slice(0, 300)}`);
+    }
+    const json = await res.json();
+    const contents = Array.isArray(json.contents) ? json.contents : [];
+    all.push(...contents);
+    if (contents.length < limit) break;
+    offset += limit;
+  }
+  return all;
+}
+
 /**
  * 指定顧客・指定月のpending予約投稿を集計する。
  * @returns {{ counts: {x:number,threads:number,facebook:number,instagram:number}, xUrlCount: number, totalCount: number }}
@@ -92,6 +113,7 @@ async function createScheduledPost({ customerCode, createdBy, platform, content,
 module.exports = {
   PLATFORM_LABELS,
   listPendingScheduledPosts,
+  listAllScheduledPostsForCustomer,
   getScheduledPostsSummary,
   createScheduledPost,
 };
