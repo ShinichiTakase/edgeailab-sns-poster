@@ -101,7 +101,10 @@ router.post(
         postResult = await postToPlatform(platform, entry, text, imageUrl, facebookPageId);
       } catch (err) {
         console.error(`[posts] platform=${platform} customerId=${customerId} post failed:`, err);
-        results[platform] = { ok: false, error: "post_failed" };
+        // Instagram側のメディア処理待ちタイムアウトは、単純な投稿失敗と区別できるよう
+        // 専用のエラーコードにする（instagramPoster.jsのwaitForContainerReady参照）。
+        const isInstagramTimeout = err.message && err.message.startsWith("instagram_processing_timeout");
+        results[platform] = { ok: false, error: isInstagramTimeout ? "instagram_processing_timeout" : "post_failed" };
         continue;
       }
 
