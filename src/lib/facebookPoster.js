@@ -2,16 +2,11 @@
 const GRAPH_API_VERSION = "v26.0";
 const GRAPH_URL = `https://graph.facebook.com/${GRAPH_API_VERSION}`;
 
-async function postText({ pageId, pageAccessToken }, text, imageUrl) {
-  const url = imageUrl ? `${GRAPH_URL}/${pageId}/photos` : `${GRAPH_URL}/${pageId}/feed`;
-  const body = imageUrl
-    ? { url: imageUrl, caption: text, access_token: pageAccessToken }
-    : { message: text, access_token: pageAccessToken };
-
-  const res = await fetch(url, {
+async function postText({ pageId, pageAccessToken }, text) {
+  const res = await fetch(`${GRAPH_URL}/${pageId}/feed`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body),
+    body: JSON.stringify({ message: text, access_token: pageAccessToken }),
   });
   const json = await res.json();
   if (!res.ok || json.error) {

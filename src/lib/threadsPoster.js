@@ -3,13 +3,10 @@ const GRAPH_URL = "https://graph.threads.net/v1.0";
 
 // Threadsはテキストのみの投稿にも対応しているが、Instagramと同じくメディア
 // コンテナ作成→公開の2段階API。
-async function postText({ userId, accessToken }, text, imageUrl) {
-  const createParams = new URLSearchParams({
-    access_token: accessToken,
-    text,
-    media_type: imageUrl ? "IMAGE" : "TEXT",
-  });
-  if (imageUrl) createParams.set("image_url", imageUrl);
+// 画像は受け取らない（Instagram専用の画像をここで添付すると、本文中のURLに
+// 対するog:imageリンクプレビューが出なくなるため。posts.js参照）。
+async function postText({ userId, accessToken }, text) {
+  const createParams = new URLSearchParams({ access_token: accessToken, text, media_type: "TEXT" });
 
   const createRes = await fetch(`${GRAPH_URL}/${userId}/threads?${createParams}`, { method: "POST" });
   const createJson = await createRes.json();

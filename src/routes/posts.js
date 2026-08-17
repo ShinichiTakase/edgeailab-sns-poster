@@ -23,18 +23,21 @@ const PLATFORMS = ["x", "threads", "facebook", "instagram"];
 // URLを含む投稿のみXサーチャージ対象（誤検知を避けるためプロトコル省略記法は対象外）。X専用。
 const URL_PATTERN = /https?:\/\//;
 
+// imageUrlはInstagram投稿専用（UI上も「画像（Instagram投稿には必須）」として案内している）。
+// Facebook/Threadsにまで同じ画像を渡すと写真投稿扱いになり、本文中のURLに対する
+// og:imageリンクプレビューが表示されなくなるため、Instagram以外には渡さない。
 async function postToPlatform(platform, entry, text, imageUrl, facebookPageId) {
   if (platform === "x") {
     return xPoster.postText(entry.access_token, text);
   }
   if (platform === "threads") {
-    return threadsPoster.postText({ userId: entry.user_id, accessToken: entry.access_token }, text, imageUrl);
+    return threadsPoster.postText({ userId: entry.user_id, accessToken: entry.access_token }, text);
   }
   if (platform === "facebook") {
     const pages = entry.pages || [];
     const page = facebookPageId ? pages.find((p) => p.pageId === facebookPageId) : pages[0];
     if (!page) throw new Error("facebook_page_not_found");
-    return facebookPoster.postText({ pageId: page.pageId, pageAccessToken: page.pageAccessToken }, text, imageUrl);
+    return facebookPoster.postText({ pageId: page.pageId, pageAccessToken: page.pageAccessToken }, text);
   }
   if (platform === "instagram") {
     return instagramPoster.postImage({ igUserId: entry.user_id, accessToken: entry.access_token }, text, imageUrl);
