@@ -5,7 +5,11 @@ const { getAnthropic } = require("./anthropicClient");
 
 const MODEL = "claude-opus-5";
 // 同期HTTPリクエストでユーザーが応答を待っているため、SDKデフォルトの10分は長すぎる。
-const REQUEST_TIMEOUT_MS = 30000;
+// 実測でAnthropic APIへの単純な呼び出しでも3〜12秒程度のばらつきが見られたため、
+// 30秒では実運用のリクエスト（原文が長い・複数SNS分を一度に生成等）で不足する
+// ケースがあり得ると判断し、余裕を持たせている（nginx側のproxy_read_timeoutも
+// 70秒に合わせて延長済み）。
+const REQUEST_TIMEOUT_MS = 45000;
 
 const PLATFORM_GUIDANCE = {
   x: "X（旧Twitter）向け: 280文字以内。簡潔でインパクトのある文章にすること。",
@@ -68,7 +72,9 @@ async function generatePostCopy({ sourceText, platforms, url }) {
       system: buildSystemPrompt(platforms, url),
       messages: [{ role: "user", content: `【原文】\n${sourceText}` }],
     },
-    { timeout: REQUEST_TIMEOUT_MS }
+    // ユーザーが同期的に応答を待つ画面のため、SDKデフォルトのリトライ（最大2回）はしない。
+    // タイムアウトのたびに約30秒×3回＝最大1〜2分待たせてしまうのを避け、失敗を早く返す。
+    { timeout: REQUEST_TIMEOUT_MS, maxRetries: 0 }
   );
 
   if (response.stop_reason === "refusal") {
