@@ -90,8 +90,18 @@ async function getScheduledPostsSummary(customerCode, year, month) {
  * @param {string} createdBy 予約を作成したユーザーid（req.user.userId）
  * @param {string} platform "x" | "threads" | "facebook" | "instagram"
  * @param {string} [imageUrl] Instagram投稿に必須の画像URL（他プラットフォームでは未使用）
+ * @param {string} [sourceScheduleId] スケジュール投稿（post_schedules）から生成された場合のみ設定
  */
-async function createScheduledPost({ customerCode, createdBy, platform, content, scheduledAt, containsUrl, imageUrl }) {
+async function createScheduledPost({
+  customerCode,
+  createdBy,
+  platform,
+  content,
+  scheduledAt,
+  containsUrl,
+  imageUrl,
+  sourceScheduleId,
+}) {
   const res = await microcmsFetch(`/scheduled_posts`, {
     method: "POST",
     body: JSON.stringify({
@@ -103,6 +113,7 @@ async function createScheduledPost({ customerCode, createdBy, platform, content,
       status: ["pending"],
       contains_url: Boolean(containsUrl),
       image_url: imageUrl || "",
+      source_schedule_id: sourceScheduleId || "",
     }),
   });
   if (!res.ok) {
@@ -155,12 +166,44 @@ async function markScheduledPostStatus(id, status) {
   }
 }
 
+/** スケジュール投稿（post_schedules）から生成された、まだ実行されていない予約を列挙する。
+ * 一時停止・削除時に未実行分をまとめて取り消すために使う。 */
+async function listPendingBySourceSchedule(scheduleId) {
+  const filters = [`source_schedule_id[equals]${encodeURIComponent(scheduleId)}`, "status[equals]pending"].join("[and]");
+  const all = [];
+  const limit = 100;
+  let offset = 0;
+  for (;;) {
+    const res = await microcmsFetch(`/scheduled_posts?filters=${filters}&limit=${limit}&offset=${offset}`);
+    if (!res.ok) {
+      const text = await res.text().catch(() => "");
+      throw new Error(`[scheduledPostStore] listPendingBySourceSchedule failed ${res.status} ${text.slice(0, 300)}`);
+    }
+    const json = await res.json();
+    const contents = Array.isArray(json.contents) ? json.contents : [];
+    all.push(...contents);
+    if (contents.length < limit) break;
+    offset += limit;
+  }
+  return all;
+}
+
+async function deleteScheduledPost(id) {
+  const res = await microcmsFetch(`/scheduled_posts/${id}`, { method: "DELETE" });
+  if (!res.ok && res.status !== 404) {
+    const text = await res.text().catch(() => "");
+    throw new Error(`[scheduledPostStore] deleteScheduledPost failed ${res.status} ${text.slice(0, 300)}`);
+  }
+}
+
 module.exports = {
   PLATFORM_LABELS,
   listPendingScheduledPosts,
   listAllScheduledPostsForCustomer,
   listDuePendingScheduledPosts,
+  listPendingBySourceSchedule,
   markScheduledPostStatus,
+  deleteScheduledPost,
   getScheduledPostsSummary,
   createScheduledPost,
 };

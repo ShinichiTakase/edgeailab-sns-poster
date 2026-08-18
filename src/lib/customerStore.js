@@ -377,6 +377,20 @@ function getTrialPostCount(customer) {
   return Number.isFinite(value) ? value : 0;
 }
 
+// requireAuth.js の requireUnderTrialPostLimit と、cron（スケジュール投稿の実行）の
+// 両方から使う純粋関数。req/resに依存しないよう判定ロジックをここに切り出している。
+function isTrialPostLimitReached(customer) {
+  const status = Array.isArray(customer.status) ? customer.status[0] : customer.status;
+  return status === "trial" && getTrialPostCount(customer) >= TRIAL_POST_LIMIT;
+}
+
+// requireAuth.js の blockCanceledCustomer と、cron（スケジュール投稿の実行）の
+// 両方から使う純粋関数。
+function isCanceled(customer) {
+  const status = Array.isArray(customer.status) ? customer.status[0] : customer.status;
+  return status === "canceled";
+}
+
 // customers.trialPostCount フィールドをdelta件分だけ加算する。
 // ループ内で複数回呼ぶと「req.customerの値が更新されないまま同じ古い値+1を
 // 複数回書き込んでしまう」バグになるため、呼び出し側は成功件数を集計してから
@@ -424,6 +438,8 @@ module.exports = {
   isTrialExpiredWithoutPayment,
   TRIAL_POST_LIMIT,
   getTrialPostCount,
+  isTrialPostLimitReached,
+  isCanceled,
   bumpTrialPostCount,
   listCustomersWithUpcomingTrialEnd,
   listAllCustomers,

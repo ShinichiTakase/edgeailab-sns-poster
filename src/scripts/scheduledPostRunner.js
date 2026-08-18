@@ -20,8 +20,9 @@ require("dotenv").config({ path: path.join(__dirname, "..", "..", ".env") });
 const { listDuePendingScheduledPosts, markScheduledPostStatus, PLATFORM_LABELS } = require("../lib/scheduledPostStore");
 const { createPostingLog } = require("../lib/postingLogStore");
 const { loadStore } = require("../lib/tokenStore");
-const { getCustomerById } = require("../lib/customerStore");
+const { getCustomerById, isTrialPostLimitReached, isCanceled } = require("../lib/customerStore");
 const { reportMeterEvent } = require("../lib/meterEvents");
+const { containsUrl } = require("../lib/urlDetection");
 const xPoster = require("../lib/xPoster");
 const facebookPoster = require("../lib/facebookPoster");
 const instagramPoster = require("../lib/instagramPoster");
@@ -32,8 +33,6 @@ const { logInfo, logWarn, logError } = require("../lib/logger").createLogger("sc
 // pending予約は、今後もこのエンジンの対象にはしない（変更しないこと。書き換えると
 // 積み残っていた過去予約が一斉に実行されてしまう）。
 const SCOPE_CUTOFF_AT = "2026-08-17T22:44:38.000Z";
-
-const URL_PATTERN = /https?:\/\//;
 
 // posts.jsのpostToPlatformと同じ方針：imageUrlはInstagramにのみ渡す
 // （Facebook/Threadsに渡すと写真投稿扱いになりog:imageリンクプレビューが出なくなるため）。
@@ -92,6 +91,11 @@ async function main() {
       const customer = await getCustomerCached(customerCode);
       if (!customer) throw new Error("customer_not_found");
 
+      // ワンショット投稿（posts.js）と同じガード。cronはHTTPリクエストの文脈を持たないため、
+      // requireAuth.jsのミドルウェアではなくcustomerStore.jsの純粋関数を直接呼ぶ。
+      if (isCanceled(customer)) throw new Error("account_canceled");
+      if (isTrialPostLimitReached(customer)) throw new Error("trial_post_limit_reached");
+
       const tokenEntry = (loadStore()[customerCode] || {})[platform];
       if (!tokenEntry) throw new Error("not_connected");
 
@@ -99,11 +103,11 @@ async function main() {
 
       await markScheduledPostStatus(post.id, "done");
 
-      const containsUrl = Boolean(post.contains_url) || URL_PATTERN.test(post.content || "");
+      const textContainsUrl = Boolean(post.contains_url) || containsUrl(post.content);
       let meterEventSent = false;
       try {
         await reportMeterEvent("post_created", customer.stripeCustomerId);
-        if (platform === "x" && containsUrl) {
+        if (platform === "x" && textContainsUrl) {
           await reportMeterEvent("x_surcharge_post", customer.stripeCustomerId);
         }
         meterEventSent = true;
@@ -118,7 +122,7 @@ async function main() {
           platform,
           content: post.content,
           platformPostId: postResult.id,
-          containsUrl,
+          containsUrl: textContainsUrl,
           meterEventSent,
         });
       } catch (logErr) {

@@ -4,7 +4,8 @@ const { COOKIE_NAME, verifySession } = require("../lib/jwt");
 const {
   getCustomerById,
   isTrialExpiredWithoutPayment,
-  getTrialPostCount,
+  isTrialPostLimitReached,
+  isCanceled,
   TRIAL_POST_LIMIT,
 } = require("../lib/customerStore");
 
@@ -74,15 +75,12 @@ function blockExpiredTrial(req, res, next) {
   next();
 }
 
-// 実投稿エンドポイント実装時に requireAuth・requireVerified と並べて
-// 組み込む想定のミドルウェア（設計のみ。現時点ではどのルートにも未接続）。
-// トライアル中（status: trial）に限り、全SNS合計の投稿数が
-// customerStore.TRIAL_POST_LIMIT（60通）に達した時点で以降の投稿をブロックする。
-// customers.trialPostCount フィールドが未作成の場合はmicroCMS管理画面での追加が必要。
+// requireAuth・requireVerified と並べて組み込むミドルウェア。トライアル中
+// （status: trial）に限り、全SNS合計の投稿数がcustomerStore.TRIAL_POST_LIMIT
+// （60通）に達した時点で以降の投稿をブロックする。判定本体はcustomerStore.js の
+// isTrialPostLimitReached（req/resに依存しない純粋関数。cronからも同じ判定を使う）。
 function requireUnderTrialPostLimit(req, res, next) {
-  const customer = req.customer;
-  const status = Array.isArray(customer.status) ? customer.status[0] : customer.status;
-  if (status === "trial" && getTrialPostCount(customer) >= TRIAL_POST_LIMIT) {
+  if (isTrialPostLimitReached(req.customer)) {
     return res.status(403).json({
       error: "trial_post_limit_reached",
       message: `トライアル中の投稿上限（${TRIAL_POST_LIMIT}通）に達しました`,
@@ -91,16 +89,15 @@ function requireUnderTrialPostLimit(req, res, next) {
   next();
 }
 
-// 実投稿エンドポイント実装時に requireAuth・requireVerified・
-// requireUnderTrialPostLimit と並べて組み込む想定のミドルウェア（設計のみ。
-// 現時点ではどのルートにも未接続）。ワンショット投稿・継続投稿の実行部分は
-// このガードを必ず組み込むこと。解約時にcustomer.statusをcanceledへ変更する
-// 処理（routes/account.js）と、解約時に予約投稿・cronを削除する処理
-// （同ファイルのcancelScheduledJobsForCustomer、現状は雛形）の実装漏れに対する
-// 保険であり、両方が働いても問題ない。
+// requireAuth・requireVerified・requireUnderTrialPostLimit と並べて組み込む
+// ミドルウェア。ワンショット投稿・継続投稿の実行部分は必ずこのガードを組み込むこと。
+// 解約時にcustomer.statusをcanceledへ変更する処理（routes/account.js）と、
+// 解約時に予約投稿・cronを削除する処理（同ファイルのcancelScheduledJobsForCustomer、
+// 現状は雛形）の実装漏れに対する保険であり、両方が働いても問題ない。
+// 判定本体はcustomerStore.js の isCanceled（req/resに依存しない純粋関数。
+// cronからも同じ判定を使う）。
 function blockCanceledCustomer(req, res, next) {
-  const status = Array.isArray(req.customer.status) ? req.customer.status[0] : req.customer.status;
-  if (status === "canceled") {
+  if (isCanceled(req.customer)) {
     return res.status(403).json({ error: "account_canceled", message: "このアカウントは解約済みです" });
   }
   next();

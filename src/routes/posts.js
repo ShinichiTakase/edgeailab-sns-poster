@@ -20,6 +20,7 @@ const {
 } = require("../lib/scheduledPostStore");
 const { parseMonthParam, isPastMonth } = require("../lib/monthParam");
 const { bumpTrialPostCount } = require("../lib/customerStore");
+const { containsUrl } = require("../lib/urlDetection");
 const xPoster = require("../lib/xPoster");
 const facebookPoster = require("../lib/facebookPoster");
 const instagramPoster = require("../lib/instagramPoster");
@@ -28,8 +29,6 @@ const threadsPoster = require("../lib/threadsPoster");
 const router = express.Router();
 
 const PLATFORMS = ["x", "threads", "facebook", "instagram"];
-// URLを含む投稿のみXサーチャージ対象（誤検知を避けるためプロトコル省略記法は対象外）。X専用。
-const URL_PATTERN = /https?:\/\//;
 
 // imageUrlはInstagram投稿専用（UI上も「画像（Instagram投稿には必須）」として案内している）。
 // Facebook/Threadsにまで同じ画像を渡すと写真投稿扱いになり、本文中のURLに対する
@@ -105,7 +104,7 @@ router.post(
       const text = texts[platform];
       // Xサーチャージ対象かどうかは、プラットフォームごとの実際の投稿文に対して判定する
       // （SNSごとに文面が異なるため、共通の一括判定ではなく個別に判定する）。
-      const containsUrl = URL_PATTERN.test(text);
+      const textContainsUrl = containsUrl(text);
 
       let postResult;
       try {
@@ -124,7 +123,7 @@ router.post(
       let meterEventSent = false;
       try {
         await reportMeterEvent("post_created", stripeCustomerId);
-        if (platform === "x" && containsUrl) {
+        if (platform === "x" && textContainsUrl) {
           await reportMeterEvent("x_surcharge_post", stripeCustomerId);
         }
         meterEventSent = true;
@@ -139,7 +138,7 @@ router.post(
           platform,
           content: text,
           platformPostId: postResult.id,
-          containsUrl,
+          containsUrl: textContainsUrl,
           meterEventSent,
         });
       } catch (err) {
@@ -211,7 +210,7 @@ router.post(
       }
 
       const text = texts[platform];
-      const containsUrl = URL_PATTERN.test(text);
+      const textContainsUrl = containsUrl(text);
 
       try {
         const created = await createScheduledPost({
@@ -220,7 +219,7 @@ router.post(
           platform,
           content: text,
           scheduledAt: scheduledDate.toISOString(),
-          containsUrl,
+          containsUrl: textContainsUrl,
           imageUrl: platform === "instagram" ? imageUrl : undefined,
         });
         successCount += 1;

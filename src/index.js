@@ -14,6 +14,7 @@ const accountRoutes = require("./routes/account");
 const postsRoutes = require("./routes/posts");
 const uploadsRoutes = require("./routes/uploads");
 const aiRoutes = require("./routes/ai");
+const schedulesRoutes = require("./routes/schedules");
 
 const app = express();
 app.use("/uploads", express.static(path.join(__dirname, "..", "uploads")));
@@ -29,6 +30,7 @@ app.use(accountRoutes);
 app.use(postsRoutes);
 app.use(uploadsRoutes);
 app.use(aiRoutes);
+app.use(schedulesRoutes);
 
 const port = process.env.PORT || 3000;
 app.listen(port, () => {
