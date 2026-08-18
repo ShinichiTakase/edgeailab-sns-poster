@@ -6,7 +6,7 @@ const { requireAuth, requireVerified, blockExpiredTrial } = require("../middlewa
 const scheduleStore = require("../lib/scheduleStore");
 const scheduleTextStore = require("../lib/scheduleTextStore");
 const { listPendingBySourceSchedule, deleteScheduledPost } = require("../lib/scheduledPostStore");
-const { isSlotWideEnough } = require("../lib/scheduleFiring");
+const { isSlotWideEnough, dateOnly } = require("../lib/scheduleFiring");
 
 const router = express.Router();
 
@@ -54,6 +54,14 @@ function toDateSummary(iso) {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 }
 
+// 本日分がscheduleMaterializer.jsによって既に生成済みか（last_materialized_dtが
+// 今日の日付と一致するか）。生成済みなら、投稿文章を編集しても本日分の
+// scheduled_postsには反映されないため、画面3で注記を出す判定に使う。
+function isMaterializedToday(schedule) {
+  if (!schedule.last_materialized_dt) return false;
+  return dateOnly(new Date(schedule.last_materialized_dt)).getTime() === dateOnly(new Date()).getTime();
+}
+
 // 一覧・詳細表示用の整形（フロントに渡す形に正規化する）。
 function serializeSchedule(schedule, textCount) {
   const platforms = Array.isArray(schedule.platforms) ? schedule.platforms : [];
@@ -74,6 +82,7 @@ function serializeSchedule(schedule, textCount) {
     ].filter((s) => s.start && s.end),
     isPaused: Boolean(schedule.is_paused),
     autoPaused: Boolean(schedule.auto_paused),
+    materializedToday: isMaterializedToday(schedule),
     facebookPageId: schedule.facebook_page_id || null,
     createdBy: schedule.created_by,
     createdAt: schedule.createdAt,

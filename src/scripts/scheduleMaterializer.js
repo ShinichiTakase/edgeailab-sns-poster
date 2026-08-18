@@ -104,6 +104,7 @@ async function main() {
             containsUrl: containsUrl(content),
             imageUrl: platform === "instagram" ? text.instagram_image_url : undefined,
             sourceScheduleId: schedule.id,
+            facebookPageId: platform === "facebook" ? schedule.facebook_page_id || undefined : undefined,
           });
           generatedPostCount += 1;
         }

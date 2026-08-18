@@ -91,6 +91,7 @@ async function getScheduledPostsSummary(customerCode, year, month) {
  * @param {string} platform "x" | "threads" | "facebook" | "instagram"
  * @param {string} [imageUrl] Instagram投稿に必須の画像URL（他プラットフォームでは未使用）
  * @param {string} [sourceScheduleId] スケジュール投稿（post_schedules）から生成された場合のみ設定
+ * @param {string} [facebookPageId] Facebook投稿先ページ（複数ページ連携時のみ。未指定なら実行時に先頭ページへフォールバック）
  */
 async function createScheduledPost({
   customerCode,
@@ -101,6 +102,7 @@ async function createScheduledPost({
   containsUrl,
   imageUrl,
   sourceScheduleId,
+  facebookPageId,
 }) {
   const res = await microcmsFetch(`/scheduled_posts`, {
     method: "POST",
@@ -114,6 +116,7 @@ async function createScheduledPost({
       contains_url: Boolean(containsUrl),
       image_url: imageUrl || "",
       source_schedule_id: sourceScheduleId || "",
+      facebook_page_id: facebookPageId || "",
     }),
   });
   if (!res.ok) {

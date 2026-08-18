@@ -45,8 +45,8 @@ async function postToPlatform(platform, entry, text, imageUrl, facebookPageId) {
   }
   if (platform === "facebook") {
     const pages = entry.pages || [];
-    // 予約投稿はfacebookPageIdを保持していないため、複数ページ連携時は先頭ページに投稿する
-    // （即時投稿と異なり、予約時にページを選び直す導線が今のところ存在しない）。
+    // facebookPageIdが指定されていればそのページへ、未指定（旧データ・単一ページ運用等）
+    // なら先頭ページへフォールバックする。
     const page = facebookPageId ? pages.find((p) => p.pageId === facebookPageId) : pages[0];
     if (!page) throw new Error("facebook_page_not_found");
     return facebookPoster.postText({ pageId: page.pageId, pageAccessToken: page.pageAccessToken }, text);
@@ -99,7 +99,7 @@ async function main() {
       const tokenEntry = (loadStore()[customerCode] || {})[platform];
       if (!tokenEntry) throw new Error("not_connected");
 
-      const postResult = await postToPlatform(platform, tokenEntry, post.content || "", post.image_url, null);
+      const postResult = await postToPlatform(platform, tokenEntry, post.content || "", post.image_url, post.facebook_page_id || null);
 
       await markScheduledPostStatus(post.id, "done");
 

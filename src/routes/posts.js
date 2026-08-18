@@ -221,6 +221,7 @@ router.post(
           scheduledAt: scheduledDate.toISOString(),
           containsUrl: textContainsUrl,
           imageUrl: platform === "instagram" ? imageUrl : undefined,
+          facebookPageId: platform === "facebook" ? facebookPageId : undefined,
         });
         successCount += 1;
         results[platform] = { ok: true, scheduledPostId: created.id };
