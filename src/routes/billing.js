@@ -6,6 +6,9 @@ const { getStripe } = require("../lib/stripeClient");
 const { planKey, pricesForPlan } = require("../lib/stripePricing");
 const { computeGraduatedAmount } = require("../lib/stripeTierPricing");
 const { getScheduledPostsSummary } = require("../lib/scheduledPostStore");
+const { listSchedulesForCustomer } = require("../lib/scheduleStore");
+const { listScheduleTexts } = require("../lib/scheduleTextStore");
+const { estimateScheduleFirings } = require("../lib/scheduleForecast");
 const { parseMonthParam, isPastMonth } = require("../lib/monthParam");
 
 const router = express.Router();
@@ -320,10 +323,33 @@ function getActivationYearMonth(customer) {
   return { year: activation.getFullYear(), month: activation.getMonth() + 1 };
 }
 
-// 実請求サイクル外の月は、scheduled_postsの予定件数をStripeのPrice tiers（単一の情報源）に
-// 当てはめて予測する。基本料金・従量単価をこのコードにハードコードしない。
-// トライアル中（本稼働開始日より前の月）は請求ゼロ、本稼働開始月は基本料金のみ、
-// それ以降は基本料金＋前月分の従量料金・Xサーチャージ（後払い方式）を予測する。
+// 対象月内で、この顧客の全スケジュール投稿（post_schedules）が生成するはずの投稿予定を
+// 合算する（1件ずつの単発予約=scheduled_postsとは別集計。estimateScheduleFirings参照）。
+async function getScheduleForecastForCustomer(customerId, year, month) {
+  const windowStart = new Date(year, month - 1, 1);
+  const windowEnd = new Date(year, month, 1);
+
+  const schedules = await listSchedulesForCustomer(customerId);
+  let totalCount = 0;
+  let xUrlCount = 0;
+
+  await Promise.all(
+    schedules.map(async (schedule) => {
+      const texts = await listScheduleTexts(schedule.id);
+      const result = estimateScheduleFirings(schedule, texts, windowStart, windowEnd);
+      totalCount += result.totalCount;
+      xUrlCount += result.xUrlCount;
+    })
+  );
+
+  return { totalCount, xUrlCount };
+}
+
+// 実請求サイクル外の月は、scheduled_postsの予定件数（単発の予約投稿）＋スケジュール投稿の
+// 生成予定件数を、StripeのPrice tiers（単一の情報源）に当てはめて予測する。基本料金・
+// 従量単価をこのコードにハードコードしない。トライアル中（本稼働開始日より前の月）は
+// 請求ゼロ、本稼働開始月は基本料金のみ、それ以降は基本料金＋前月分の従量料金・
+// Xサーチャージ（後払い方式）を予測する。
 async function predictFromScheduledPosts(stripe, customer, prices, year, month) {
   const activation = getActivationYearMonth(customer);
   if (activation) {
@@ -346,16 +372,19 @@ async function predictFromScheduledPosts(stripe, customer, prices, year, month) 
   const prevMonth = month === 1 ? 12 : month - 1;
   const prevYear = month === 1 ? year - 1 : year;
 
-  const [basePrice, meteredPrice, meteredXPrice, summary] = await Promise.all([
+  const [basePrice, meteredPrice, meteredXPrice, summary, scheduleForecast] = await Promise.all([
     stripe.prices.retrieve(prices.base),
     stripe.prices.retrieve(prices.metered, { expand: ["tiers"] }),
     stripe.prices.retrieve(prices.meteredX, { expand: ["tiers"] }),
     getScheduledPostsSummary(customer.id, prevYear, prevMonth),
+    getScheduleForecastForCustomer(customer.id, prevYear, prevMonth),
   ]);
 
   const basicFee = basePrice.unit_amount || 0;
-  const usageFee = computeGraduatedAmount(meteredPrice.tiers, summary.totalCount);
-  const xSurcharge = computeGraduatedAmount(meteredXPrice.tiers, summary.xUrlCount);
+  const totalCount = summary.totalCount + scheduleForecast.totalCount;
+  const xUrlCount = summary.xUrlCount + scheduleForecast.xUrlCount;
+  const usageFee = computeGraduatedAmount(meteredPrice.tiers, totalCount);
+  const xSurcharge = computeGraduatedAmount(meteredXPrice.tiers, xUrlCount);
   return { basicFee, usageFee, xSurcharge, total: basicFee + usageFee + xSurcharge };
 }
 
