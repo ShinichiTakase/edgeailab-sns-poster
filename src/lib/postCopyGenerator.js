@@ -168,32 +168,20 @@ function convertVariationsToArrays(raw, platforms, count) {
 }
 
 /**
- * generatePostCopyと同様だが、プラットフォームごとにcount件の異なるバリエーションを
- * 1回のAI呼び出しでまとめて生成する（スケジュール投稿のラウンドロビン用）。
- * @param {string} sourceText 原文またはURLから取得した本文
- * @param {string[]} platforms "x" | "threads" | "facebook" | "instagram" の配列
- * @param {string} [url] 投稿文に含めるべき元URL（URL指定投稿の場合のみ）
- * @param {number} count 生成するバリエーション数
- * @returns {Promise<Record<string,string[]>>} プラットフォームごとのバリエーション配列
+ * 1プラットフォーム分のcount件バリエーションを1回のAI呼び出しで生成する。
+ * generatePostCopyVariationsから並列に呼び出される。
  */
-async function generatePostCopyVariations({ sourceText, platforms, url, count }) {
-  const anthropic = getAnthropic();
-  if (!anthropic) {
-    throw new Error("anthropic_not_configured");
-  }
-
+async function generateVariationsForPlatform(anthropic, { sourceText, platform, url, count }) {
   const response = await anthropic.messages.create(
     {
       model: MODEL,
-      // 単発生成時のmax_tokens:4096の根拠（プラットフォームあたり最大2000トークン超）に
-      // count倍の余裕を持たせる。4SNS×10パターンでも打ち切られないようにするため。
-      max_tokens: Math.min(4096 * count, 32000),
+      max_tokens: Math.min(4096 * count, 16000),
       thinking: { type: "disabled" },
       output_config: {
         effort: "low",
-        format: { type: "json_schema", schema: buildVariationsSchema(platforms, count) },
+        format: { type: "json_schema", schema: buildVariationsSchema([platform], count) },
       },
-      system: buildVariationsSystemPrompt(platforms, url, count),
+      system: buildVariationsSystemPrompt([platform], url, count),
       messages: [{ role: "user", content: `【原文】\n${sourceText}` }],
     },
     { timeout: VARIATIONS_REQUEST_TIMEOUT_MS, maxRetries: 0 }
@@ -209,7 +197,36 @@ async function generatePostCopyVariations({ sourceText, platforms, url, count })
   if (!textBlock) {
     throw new Error("ai_no_output");
   }
-  return convertVariationsToArrays(JSON.parse(textBlock.text), platforms, count);
+  return convertVariationsToArrays(JSON.parse(textBlock.text), [platform], count)[platform];
+}
+
+/**
+ * generatePostCopyと同様だが、プラットフォームごとにcount件の異なるバリエーションを
+ * 生成する（スケジュール投稿のラウンドロビン用）。
+ *
+ * プラットフォームをまとめて1回のAI呼び出しで生成すると（例: 3SNS×10パターン）出力量が
+ * 大きくなり実測で70〜90秒超かかることがあり、サーバー側タイムアウト（VARIATIONS_REQUEST_TIMEOUT_MS）
+ * ぎりぎりで失敗するケースが実際にあった。プラットフォームごとに呼び出しを分割しPromise.allで
+ * 並列実行することで、1呼び出しあたりの出力量・所要時間を1/プラットフォーム数に抑える
+ * （実測: 1SNS×10パターンで約30秒。3SNS並列でも最も遅い1本と同程度で完了する）。
+ * @param {string} sourceText 原文またはURLから取得した本文
+ * @param {string[]} platforms "x" | "threads" | "facebook" | "instagram" の配列
+ * @param {string} [url] 投稿文に含めるべき元URL（URL指定投稿の場合のみ）
+ * @param {number} count 生成するバリエーション数
+ * @returns {Promise<Record<string,string[]>>} プラットフォームごとのバリエーション配列
+ */
+async function generatePostCopyVariations({ sourceText, platforms, url, count }) {
+  const anthropic = getAnthropic();
+  if (!anthropic) {
+    throw new Error("anthropic_not_configured");
+  }
+
+  const perPlatform = await Promise.all(
+    platforms.map((platform) =>
+      generateVariationsForPlatform(anthropic, { sourceText, platform, url, count }).then((texts) => [platform, texts])
+    )
+  );
+  return Object.fromEntries(perPlatform);
 }
 
 module.exports = { generatePostCopy, generatePostCopyVariations };

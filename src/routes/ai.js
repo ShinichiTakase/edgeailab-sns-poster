@@ -25,6 +25,10 @@ function handleGenerationError(res, err, logPrefix, customerId) {
   if (err.message === "ai_output_truncated") {
     return res.status(422).json({ error: "ai_output_truncated" });
   }
+  if (err.constructor && err.constructor.name === "APIConnectionTimeoutError") {
+    console.error(`${logPrefix} customerId=${customerId} timed out:`, err);
+    return res.status(504).json({ error: "ai_timeout" });
+  }
   console.error(`${logPrefix} customerId=${customerId} failed:`, err);
   return res.status(502).json({ error: "ai_generation_failed" });
 }

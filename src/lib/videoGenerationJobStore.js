@@ -7,6 +7,7 @@ const fs = require("fs");
 const path = require("path");
 const { renderVideo } = require("./videoGenerator");
 const { generatePostCopyVariations } = require("./postCopyGenerator");
+const { fetchUrlText } = require("./urlTextFetcher");
 
 const UPLOAD_DIR = path.join(__dirname, "..", "..", "uploads");
 const VIDEO_RENDER_CONCURRENCY = 2;
@@ -80,10 +81,29 @@ function startVideoGenerationJob({ sourceText, url }) {
   const { signal } = job.abortController;
 
   (async () => {
+    // URL指定の場合、URL文字列だけをAIプロンプトに渡して「読んだふり」の生成を
+    // させないため、ここで必ず実際のページ本文をfetchしてからAI生成に渡す
+    // （urlTextFetcher.jsのコメント参照。以前は未fetchのままurlを渡すだけになっており、
+    // 動画の内容が記事本文と無関係になる不具合があった）。
+    let resolvedSourceText = sourceText;
+    if (url) {
+      try {
+        resolvedSourceText = await fetchUrlText(url);
+      } catch (err) {
+        if (job.status !== "canceled") {
+          job.status = "error";
+          job.error = "url_fetch_failed";
+        }
+        return;
+      }
+    }
+
+    if (signal.aborted) return;
+
     let captions;
     try {
       const variations = await generatePostCopyVariations({
-        sourceText,
+        sourceText: resolvedSourceText,
         platforms: ["instagram"],
         url,
         count: SLOT_COUNT,
