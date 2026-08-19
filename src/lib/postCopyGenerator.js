@@ -10,6 +10,10 @@ const MODEL = "claude-opus-5";
 // ケースがあり得ると判断し、余裕を持たせている（nginx側のproxy_read_timeoutも
 // 70秒に合わせて延長済み）。
 const REQUEST_TIMEOUT_MS = 45000;
+// generatePostCopyVariations用。1回で10パターン×最大4SNS分を生成するため出力量が
+// 単発生成の約10倍になり、応答時間も伸びる。nginx側のproxy_read_timeoutも100秒に
+// 合わせて延長している（deploy/xserver-vps/proxy/edgeailab.net.conf参照）。
+const VARIATIONS_REQUEST_TIMEOUT_MS = 90000;
 
 const PLATFORM_GUIDANCE = {
   x:
@@ -111,4 +115,101 @@ async function generatePostCopy({ sourceText, platforms, url }) {
   return JSON.parse(textBlock.text);
 }
 
-module.exports = { generatePostCopy };
+function buildVariationsSystemPrompt(platforms, url, count) {
+  const base = buildSystemPrompt(platforms, url);
+  return (
+    base +
+    `\n各プラットフォームにつき、投稿文を${count}パターン生成してください。` +
+    "これらは同一スケジュールで日を分けて順番に投稿されるローテーション用のバリエーションです。" +
+    "同じSNSに短期間で似た文面が連続投稿されるとスパムと判定されるリスクがあるため、" +
+    `${count}パターンは言い回し・切り口・構成・フックの取り方をそれぞれ明確に変え、単なる同義語の` +
+      "置き換えにならないようにしてください。ただし原文の事実関係はどのパターンでも正確に反映すること。"
+  );
+}
+
+// Anthropic APIのjson_schema出力はarray型のminItems/maxItemsに0/1以外を指定できない
+// （実測でcount>1を指定すると400エラーになる）。そのためcount件の配列ではなく、
+// v1〜vN固定キーを持つオブジェクトとして出力させ、あとでconvertVariationsToArraysで
+// 配列に変換する。
+function variationKeys(count) {
+  return Array.from({ length: count }, (_, i) => `v${i + 1}`);
+}
+
+function buildVariationsSchema(platforms, count) {
+  const keys = variationKeys(count);
+  const variationProperties = {};
+  for (const key of keys) {
+    variationProperties[key] = { type: "string" };
+  }
+  const properties = {};
+  for (const platform of platforms) {
+    properties[platform] = {
+      type: "object",
+      properties: variationProperties,
+      required: keys,
+      additionalProperties: false,
+    };
+  }
+  return {
+    type: "object",
+    properties,
+    required: platforms,
+    additionalProperties: false,
+  };
+}
+
+function convertVariationsToArrays(raw, platforms, count) {
+  const keys = variationKeys(count);
+  const result = {};
+  for (const platform of platforms) {
+    result[platform] = keys.map((key) => raw[platform][key]);
+  }
+  return result;
+}
+
+/**
+ * generatePostCopyと同様だが、プラットフォームごとにcount件の異なるバリエーションを
+ * 1回のAI呼び出しでまとめて生成する（スケジュール投稿のラウンドロビン用）。
+ * @param {string} sourceText 原文またはURLから取得した本文
+ * @param {string[]} platforms "x" | "threads" | "facebook" | "instagram" の配列
+ * @param {string} [url] 投稿文に含めるべき元URL（URL指定投稿の場合のみ）
+ * @param {number} count 生成するバリエーション数
+ * @returns {Promise<Record<string,string[]>>} プラットフォームごとのバリエーション配列
+ */
+async function generatePostCopyVariations({ sourceText, platforms, url, count }) {
+  const anthropic = getAnthropic();
+  if (!anthropic) {
+    throw new Error("anthropic_not_configured");
+  }
+
+  const response = await anthropic.messages.create(
+    {
+      model: MODEL,
+      // 単発生成時のmax_tokens:4096の根拠（プラットフォームあたり最大2000トークン超）に
+      // count倍の余裕を持たせる。4SNS×10パターンでも打ち切られないようにするため。
+      max_tokens: Math.min(4096 * count, 32000),
+      thinking: { type: "disabled" },
+      output_config: {
+        effort: "low",
+        format: { type: "json_schema", schema: buildVariationsSchema(platforms, count) },
+      },
+      system: buildVariationsSystemPrompt(platforms, url, count),
+      messages: [{ role: "user", content: `【原文】\n${sourceText}` }],
+    },
+    { timeout: VARIATIONS_REQUEST_TIMEOUT_MS, maxRetries: 0 }
+  );
+
+  if (response.stop_reason === "refusal") {
+    throw new Error("ai_refusal");
+  }
+  if (response.stop_reason === "max_tokens") {
+    throw new Error("ai_output_truncated");
+  }
+  const textBlock = response.content.find((b) => b.type === "text");
+  if (!textBlock) {
+    throw new Error("ai_no_output");
+  }
+  return convertVariationsToArrays(JSON.parse(textBlock.text), platforms, count);
+}
+
+module.exports = { generatePostCopy, generatePostCopyVariations };

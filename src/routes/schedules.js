@@ -260,6 +260,7 @@ router.get("/api/schedules/:id/texts", requireAuth, async (req, res) => {
         facebookText: t.facebook_text || "",
         instagramText: t.instagram_text || "",
         instagramImageUrl: t.instagram_image_url || "",
+        instagramVideoUrl: t.instagram_video_url || "",
         createdAt: t.createdAt,
       })),
     });
@@ -275,11 +276,57 @@ function validateTextInput(schedule, body) {
     const key = { x: "xText", threads: "threadsText", facebook: "facebookText", instagram: "instagramText" }[platform];
     if (!body[key] || !body[key].trim()) return "text_required";
   }
-  if (platforms.includes("instagram") && !body.instagramImageUrl) {
-    return "instagram_image_required";
+  // Instagramは画像投稿（旧仕様の単発編集）・動画投稿（新仕様のリール）のいずれかが必須。
+  if (platforms.includes("instagram") && !body.instagramImageUrl && !body.instagramVideoUrl) {
+    return "instagram_media_required";
   }
   return null;
 }
+
+// スケジュール投稿の「投稿文章を追加」画面から、1回の操作でBULK_TEXT_COUNT件のエントリを
+// まとめて作成する（ラウンドロビン用のバリエーションを一括登録するため）。
+const BULK_TEXT_COUNT = 10;
+
+router.post(
+  "/api/schedules/:id/texts/bulk",
+  requireAuth,
+  requireVerified,
+  blockExpiredTrial,
+  express.json(),
+  async (req, res) => {
+    try {
+      const schedule = await loadOwnedSchedule(req, res);
+      if (!schedule) return;
+      const entries = Array.isArray(req.body?.entries) ? req.body.entries : [];
+      if (entries.length !== BULK_TEXT_COUNT) {
+        return res.status(400).json({ error: "invalid_entry_count" });
+      }
+      for (const entry of entries) {
+        const validationError = validateTextInput(schedule, entry || {});
+        if (validationError) {
+          return res.status(400).json({ error: validationError });
+        }
+      }
+      const created = await Promise.all(
+        entries.map((entry) =>
+          scheduleTextStore.createScheduleText({
+            scheduleId: schedule.id,
+            xText: entry.xText,
+            threadsText: entry.threadsText,
+            facebookText: entry.facebookText,
+            instagramText: entry.instagramText,
+            instagramImageUrl: entry.instagramImageUrl,
+            instagramVideoUrl: entry.instagramVideoUrl,
+          })
+        )
+      );
+      res.json({ ids: created.map((c) => c.id) });
+    } catch (err) {
+      console.error(`[schedules] bulk create text failed id=${req.params.id}:`, err);
+      res.status(500).json({ error: "internal_error" });
+    }
+  }
+);
 
 router.post("/api/schedules/:id/texts", requireAuth, requireVerified, blockExpiredTrial, express.json(), async (req, res) => {
   try {
@@ -330,6 +377,7 @@ router.patch(
         facebook_text: body.facebookText || "",
         instagram_text: body.instagramText || "",
         instagram_image_url: body.instagramImageUrl || "",
+        instagram_video_url: body.instagramVideoUrl || "",
       });
       res.json({ ok: true });
     } catch (err) {

@@ -89,7 +89,8 @@ async function getScheduledPostsSummary(customerCode, year, month) {
  * @param {string} customerCode microCMS顧客レコードid（req.customer.id）
  * @param {string} createdBy 予約を作成したユーザーid（req.user.userId）
  * @param {string} platform "x" | "threads" | "facebook" | "instagram"
- * @param {string} [imageUrl] Instagram投稿に必須の画像URL（他プラットフォームでは未使用）
+ * @param {string} [imageUrl] Instagram画像投稿に必須の画像URL（他プラットフォームでは未使用）
+ * @param {string} [videoUrl] Instagramリール投稿に必須の動画URL（imageUrlと排他。他プラットフォームでは未使用）
  * @param {string} [sourceScheduleId] スケジュール投稿（post_schedules）から生成された場合のみ設定
  * @param {string} [facebookPageId] Facebook投稿先ページ（複数ページ連携時のみ。未指定なら実行時に先頭ページへフォールバック）
  */
@@ -101,6 +102,7 @@ async function createScheduledPost({
   scheduledAt,
   containsUrl,
   imageUrl,
+  videoUrl,
   sourceScheduleId,
   facebookPageId,
 }) {
@@ -115,6 +117,7 @@ async function createScheduledPost({
       status: ["pending"],
       contains_url: Boolean(containsUrl),
       image_url: imageUrl || "",
+      video_url: videoUrl || "",
       source_schedule_id: sourceScheduleId || "",
       facebook_page_id: facebookPageId || "",
     }),

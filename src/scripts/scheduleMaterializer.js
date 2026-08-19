@@ -103,6 +103,7 @@ async function main() {
             scheduledAt: scheduledAt.toISOString(),
             containsUrl: containsUrl(content),
             imageUrl: platform === "instagram" ? text.instagram_image_url : undefined,
+            videoUrl: platform === "instagram" ? text.instagram_video_url : undefined,
             sourceScheduleId: schedule.id,
             facebookPageId: platform === "facebook" ? schedule.facebook_page_id || undefined : undefined,
           });

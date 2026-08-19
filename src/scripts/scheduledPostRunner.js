@@ -34,9 +34,10 @@ const { logInfo, logWarn, logError } = require("../lib/logger").createLogger("sc
 // 積み残っていた過去予約が一斉に実行されてしまう）。
 const SCOPE_CUTOFF_AT = "2026-08-17T22:44:38.000Z";
 
-// posts.jsのpostToPlatformと同じ方針：imageUrlはInstagramにのみ渡す
+// posts.jsのpostToPlatformと同じ方針：imageUrl/videoUrlはInstagramにのみ渡す
 // （Facebook/Threadsに渡すと写真投稿扱いになりog:imageリンクプレビューが出なくなるため）。
-async function postToPlatform(platform, entry, text, imageUrl, facebookPageId) {
+// Instagramはvideo_urlがあればリール投稿、なければ従来通り画像投稿にフォールバックする。
+async function postToPlatform(platform, entry, text, imageUrl, videoUrl, facebookPageId) {
   if (platform === "x") {
     return xPoster.postText(entry.access_token, text);
   }
@@ -52,7 +53,9 @@ async function postToPlatform(platform, entry, text, imageUrl, facebookPageId) {
     return facebookPoster.postText({ pageId: page.pageId, pageAccessToken: page.pageAccessToken }, text);
   }
   if (platform === "instagram") {
-    return instagramPoster.postImage({ igUserId: entry.user_id, accessToken: entry.access_token }, text, imageUrl);
+    const igEntry = { igUserId: entry.user_id, accessToken: entry.access_token };
+    if (videoUrl) return instagramPoster.postReel(igEntry, text, videoUrl);
+    return instagramPoster.postImage(igEntry, text, imageUrl);
   }
   throw new Error(`unknown_platform:${platform}`);
 }
@@ -99,7 +102,14 @@ async function main() {
       const tokenEntry = (loadStore()[customerCode] || {})[platform];
       if (!tokenEntry) throw new Error("not_connected");
 
-      const postResult = await postToPlatform(platform, tokenEntry, post.content || "", post.image_url, post.facebook_page_id || null);
+      const postResult = await postToPlatform(
+        platform,
+        tokenEntry,
+        post.content || "",
+        post.image_url,
+        post.video_url,
+        post.facebook_page_id || null
+      );
 
       await markScheduledPostStatus(post.id, "done");
 

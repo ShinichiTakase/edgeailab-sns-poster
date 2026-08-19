@@ -33,7 +33,15 @@ async function getScheduleTextById(id) {
   return res.json();
 }
 
-async function createScheduleText({ scheduleId, xText, threadsText, facebookText, instagramText, instagramImageUrl }) {
+async function createScheduleText({
+  scheduleId,
+  xText,
+  threadsText,
+  facebookText,
+  instagramText,
+  instagramImageUrl,
+  instagramVideoUrl,
+}) {
   const res = await microcmsFetch(`/schedule_texts`, {
     method: "POST",
     body: JSON.stringify({
@@ -43,6 +51,7 @@ async function createScheduleText({ scheduleId, xText, threadsText, facebookText
       facebook_text: facebookText || "",
       instagram_text: instagramText || "",
       instagram_image_url: instagramImageUrl || "",
+      instagram_video_url: instagramVideoUrl || "",
     }),
   });
   if (!res.ok) {
