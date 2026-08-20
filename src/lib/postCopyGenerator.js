@@ -92,26 +92,35 @@ async function generatePostCopy({ sourceText, platforms, url }) {
     throw new Error("anthropic_not_configured");
   }
 
-  const response = await anthropic.messages.create(
-    {
-      model: MODEL,
-      // Instagram単体（2200文字目安）だけでも出力が2000トークン超になり得るため、
-      // 4SNS同時選択でも打ち切られない余裕を持たせる（実測でmax_tokens:2048だと
-      // 複数SNS選択時にstop_reason:"max_tokens"で出力が途中で切れ、不完全なJSONに
-      // なってパースエラーになっていた）。
-      max_tokens: 4096,
-      thinking: { type: "disabled" },
-      output_config: {
-        effort: "low",
-        format: { type: "json_schema", schema: buildSchema(platforms) },
+  // 体感速度の遅さの原因切り分け調査用（2026-08-20）。Claude API呼び出し単体の所要時間を計測する。
+  const __t0 = Date.now();
+  let response;
+  try {
+    response = await anthropic.messages.create(
+      {
+        model: MODEL,
+        // Instagram単体（2200文字目安）だけでも出力が2000トークン超になり得るため、
+        // 4SNS同時選択でも打ち切られない余裕を持たせる（実測でmax_tokens:2048だと
+        // 複数SNS選択時にstop_reason:"max_tokens"で出力が途中で切れ、不完全なJSONに
+        // なってパースエラーになっていた）。
+        max_tokens: 4096,
+        thinking: { type: "disabled" },
+        output_config: {
+          effort: "low",
+          format: { type: "json_schema", schema: buildSchema(platforms) },
+        },
+        system: buildSystemPrompt(platforms, url),
+        messages: [{ role: "user", content: `【原文】\n${sourceText}` }],
       },
-      system: buildSystemPrompt(platforms, url),
-      messages: [{ role: "user", content: `【原文】\n${sourceText}` }],
-    },
-    // ユーザーが同期的に応答を待つ画面のため、SDKデフォルトのリトライ（最大2回）はしない。
-    // タイムアウトのたびに約30秒×3回＝最大1〜2分待たせてしまうのを避け、失敗を早く返す。
-    { timeout: REQUEST_TIMEOUT_MS, maxRetries: 0 }
-  );
+      // ユーザーが同期的に応答を待つ画面のため、SDKデフォルトのリトライ（最大2回）はしない。
+      // タイムアウトのたびに約30秒×3回＝最大1〜2分待たせてしまうのを避け、失敗を早く返す。
+      { timeout: REQUEST_TIMEOUT_MS, maxRetries: 0 }
+    );
+  } finally {
+    console.log(
+      `[timing] postCopyGenerator.generatePostCopy platforms=${platforms.join(",")} durationMs=${Date.now() - __t0}`
+    );
+  }
 
   if (response.stop_reason === "refusal") {
     throw new Error("ai_refusal");
@@ -190,20 +199,32 @@ async function generateVariationsForPlatform(anthropic, { sourceText, platform, 
   // 必要になった場合はこの前提が崩れるため、その際は呼び出し元からreelMode相当を明示的に
   // 渡す形に変更すること。
   const reelMode = platform === "instagram";
-  const response = await anthropic.messages.create(
-    {
-      model: MODEL,
-      max_tokens: Math.min(4096 * count, 16000),
-      thinking: { type: "disabled" },
-      output_config: {
-        effort: "low",
-        format: { type: "json_schema", schema: buildVariationsSchema([platform], count) },
+  // 体感速度の遅さの原因切り分け調査用（2026-08-20）。Claude API呼び出し単体の所要時間を計測する。
+  // 開始時刻も記録し、並行実行しているはずの他プラットフォーム分と実際に時間帯が重なっているか
+  // （＝逐次実行になっていないか）を後からログで確認できるようにする。
+  const __t0 = Date.now();
+  let response;
+  try {
+    response = await anthropic.messages.create(
+      {
+        model: MODEL,
+        max_tokens: Math.min(4096 * count, 16000),
+        thinking: { type: "disabled" },
+        output_config: {
+          effort: "low",
+          format: { type: "json_schema", schema: buildVariationsSchema([platform], count) },
+        },
+        system: buildVariationsSystemPrompt([platform], url, count, { reelMode }),
+        messages: [{ role: "user", content: `【原文】\n${sourceText}` }],
       },
-      system: buildVariationsSystemPrompt([platform], url, count, { reelMode }),
-      messages: [{ role: "user", content: `【原文】\n${sourceText}` }],
-    },
-    { timeout: VARIATIONS_REQUEST_TIMEOUT_MS, maxRetries: 0 }
-  );
+      { timeout: VARIATIONS_REQUEST_TIMEOUT_MS, maxRetries: 0 }
+    );
+  } finally {
+    console.log(
+      `[timing] postCopyGenerator.generateVariationsForPlatform platform=${platform} count=${count} ` +
+        `startedAtMs=${__t0} durationMs=${Date.now() - __t0}`
+    );
+  }
 
   if (response.stop_reason === "refusal") {
     throw new Error("ai_refusal");

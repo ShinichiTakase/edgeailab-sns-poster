@@ -282,7 +282,11 @@ const DRAWERS = { typewriter: drawTypewriter, endroll: drawEndroll, slidein: dra
 async function renderVideo({ captionText, outPath, signal }) {
   ensureFontRegistered();
 
+  // 体感速度の遅さの原因切り分け調査用（2026-08-20）。Claude API呼び出し（配色・BGM判定）と
+  // 実際のffmpeg/canvasレンダリングの所要時間を分けて記録する。
+  const __styleT0 = Date.now();
   const style = await pickVideoStyle({ captionText });
+  const __styleMs = Date.now() - __styleT0;
   if (signal?.aborted) throw new DOMExceptionLike("canceled");
 
   const { textColor, contrastRatio: ratio } = pickTextColor(style.accentColorHex);
@@ -299,6 +303,7 @@ async function renderVideo({ captionText, outPath, signal }) {
   );
   const drawCaption = DRAWERS[animation];
 
+  const __renderT0 = Date.now();
   await new Promise((resolve, reject) => {
     const frameStream = new PassThrough();
     let aborted = false;
@@ -367,6 +372,11 @@ async function renderVideo({ captionText, outPath, signal }) {
       }
     })();
   });
+
+  console.log(
+    `[timing] videoGenerator.renderVideo styleMs=${__styleMs} renderMs=${Date.now() - __renderT0} ` +
+      `totalFrames=${TOTAL_FRAMES}`
+  );
 
   if (signal?.aborted) {
     fs.promises.unlink(outPath).catch(() => {});

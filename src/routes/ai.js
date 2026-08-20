@@ -87,6 +87,7 @@ router.post(
   blockExpiredTrial,
   express.json(),
   async (req, res) => {
+    const __routeT0 = Date.now();
     const { platforms, sourceText } = req.body || {};
     if (!validatePlatforms(platforms)) {
       return res.status(400).json({ error: "invalid_platforms" });
@@ -97,8 +98,12 @@ router.post(
 
     try {
       const results = await generatePostCopyVariations({ sourceText, platforms, count: VARIATION_COUNT });
+      console.log(
+        `[timing] ai/generate-post-variations platforms=${platforms.join(",")} totalMs=${Date.now() - __routeT0}`
+      );
       res.json({ results });
     } catch (err) {
+      console.log(`[timing] ai/generate-post-variations FAILED totalMs=${Date.now() - __routeT0}`);
       handleGenerationError(res, err, "[ai/generate-post-variations]", req.customer.id);
     }
   }
@@ -110,6 +115,9 @@ router.post(
   blockExpiredTrial,
   express.json(),
   async (req, res) => {
+    // 体感速度の遅さの原因切り分け調査用（2026-08-20）。fetch・AI生成・リクエスト全体
+    // それぞれの所要時間を分けて記録する。
+    const __routeT0 = Date.now();
     const { platforms, url } = req.body || {};
     if (!validatePlatforms(platforms)) {
       return res.status(400).json({ error: "invalid_platforms" });
@@ -119,16 +127,28 @@ router.post(
     }
 
     let sourceText;
+    const __fetchT0 = Date.now();
     try {
       sourceText = await fetchUrlText(url);
     } catch (err) {
+      console.log(`[timing] ai/generate-post-variations-from-url fetch failed after fetchMs=${Date.now() - __fetchT0}`);
       return handleFetchError(res, err, "[ai/generate-post-variations-from-url]", req.customer.id, url);
     }
+    const __fetchMs = Date.now() - __fetchT0;
 
+    const __genT0 = Date.now();
     try {
       const results = await generatePostCopyVariations({ sourceText, platforms, url, count: VARIATION_COUNT });
+      const __genMs = Date.now() - __genT0;
+      console.log(
+        `[timing] ai/generate-post-variations-from-url platforms=${platforms.join(",")} ` +
+          `fetchMs=${__fetchMs} genMs=${__genMs} totalMs=${Date.now() - __routeT0}`
+      );
       res.json({ results });
     } catch (err) {
+      console.log(
+        `[timing] ai/generate-post-variations-from-url FAILED fetchMs=${__fetchMs} genMs=${Date.now() - __genT0} totalMs=${Date.now() - __routeT0}`
+      );
       handleGenerationError(res, err, "[ai/generate-post-variations-from-url]", req.customer.id);
     }
   }

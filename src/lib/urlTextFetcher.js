@@ -48,6 +48,16 @@ function stripHtml(html) {
 
 /** 指定URLの本文テキストを実際に取得する（先頭MAX_TEXT_LENGTH文字まで）。 */
 async function fetchUrlText(url) {
+  // 体感速度の遅さの原因切り分け調査用（2026-08-20）。URL fetch単体の所要時間を計測する。
+  const __t0 = Date.now();
+  try {
+    return await fetchUrlTextInner(url);
+  } finally {
+    console.log(`[timing] urlTextFetcher.fetchUrlText durationMs=${Date.now() - __t0} url=${url}`);
+  }
+}
+
+async function fetchUrlTextInner(url) {
   let parsed;
   try {
     parsed = new URL(url);

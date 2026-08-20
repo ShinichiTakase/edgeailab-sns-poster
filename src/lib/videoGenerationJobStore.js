@@ -81,6 +81,9 @@ function startVideoGenerationJob({ sourceText, url }) {
   const job = createJob();
   const { signal } = job.abortController;
 
+  // 体感速度の遅さの原因切り分け調査用（2026-08-20）。ジョブ全体の各フェーズの所要時間を記録する。
+  const __jobT0 = Date.now();
+
   (async () => {
     // URL指定の場合、URL文字列だけをAIプロンプトに渡して「読んだふり」の生成を
     // させないため、ここで必ず実際のページ本文をfetchしてからAI生成に渡す
@@ -88,20 +91,24 @@ function startVideoGenerationJob({ sourceText, url }) {
     // 動画の内容が記事本文と無関係になる不具合があった）。
     let resolvedSourceText = sourceText;
     if (url) {
+      const __fetchT0 = Date.now();
       try {
         resolvedSourceText = await fetchUrlText(url);
       } catch (err) {
+        console.log(`[timing] videoGenerationJobStore fetch FAILED afterMs=${Date.now() - __fetchT0}`);
         if (job.status !== "canceled") {
           job.status = "error";
           job.error = classifyFetchError(err).code;
         }
         return;
       }
+      console.log(`[timing] videoGenerationJobStore fetch durationMs=${Date.now() - __fetchT0}`);
     }
 
     if (signal.aborted) return;
 
     let captions;
+    const __captionT0 = Date.now();
     try {
       const variations = await generatePostCopyVariations({
         sourceText: resolvedSourceText,
@@ -111,15 +118,18 @@ function startVideoGenerationJob({ sourceText, url }) {
       });
       captions = variations.instagram;
     } catch (err) {
+      console.log(`[timing] videoGenerationJobStore caption-gen FAILED afterMs=${Date.now() - __captionT0}`);
       if (job.status !== "canceled") {
         job.status = "error";
         job.error = classifyGenerationError(err).code;
       }
       return;
     }
+    console.log(`[timing] videoGenerationJobStore caption-gen durationMs=${Date.now() - __captionT0}`);
 
     if (signal.aborted) return;
 
+    const __renderPhaseT0 = Date.now();
     try {
       await runWithConcurrency(job.slots, VIDEO_RENDER_CONCURRENCY, async (slot) => {
         if (signal.aborted) {
@@ -130,8 +140,13 @@ function startVideoGenerationJob({ sourceText, url }) {
         slot.caption = captions[slot.index];
         const filename = `${crypto.randomUUID()}.mp4`;
         const outPath = path.join(UPLOAD_DIR, filename);
+        const __slotT0 = Date.now();
         try {
           const style = await renderVideo({ captionText: slot.caption, outPath, signal });
+          console.log(
+            `[timing] videoGenerationJobStore slot=${slot.index} startedAtMs=${__slotT0 - __jobT0} ` +
+              `durationMs=${Date.now() - __slotT0}`
+          );
           if (signal.aborted) {
             slot.status = "canceled";
             return;
@@ -150,6 +165,10 @@ function startVideoGenerationJob({ sourceText, url }) {
         }
       });
     } finally {
+      console.log(
+        `[timing] videoGenerationJobStore ALL_SLOTS renderPhaseMs=${Date.now() - __renderPhaseT0} ` +
+          `jobTotalMs=${Date.now() - __jobT0}`
+      );
       if (job.status === "running") {
         job.status = "done";
       }
