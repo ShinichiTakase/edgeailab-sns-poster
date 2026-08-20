@@ -63,10 +63,20 @@ async function fetchUrlText(url) {
     throw new Error("url_not_allowed");
   }
 
-  const res = await fetch(url, {
-    headers: { "User-Agent": USER_AGENT },
-    signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
-  });
+  let res;
+  try {
+    res = await fetch(url, {
+      headers: { "User-Agent": USER_AGENT },
+      signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
+    });
+  } catch (e) {
+    // AbortSignal.timeout()由来の中断はe.name === "TimeoutError"（Node 20のfetch実装で確認済み）。
+    // それ以外（DNS解決失敗・接続拒否等）はTypeError("fetch failed")になる。
+    if (e.name === "TimeoutError") {
+      throw new Error("fetch_timeout");
+    }
+    throw new Error("network_error");
+  }
   if (!res.ok) {
     throw new Error(`fetch_failed_${res.status}`);
   }

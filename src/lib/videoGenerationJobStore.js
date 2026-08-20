@@ -8,6 +8,7 @@ const path = require("path");
 const { renderVideo } = require("./videoGenerator");
 const { generatePostCopyVariations } = require("./postCopyGenerator");
 const { fetchUrlText } = require("./urlTextFetcher");
+const { classifyFetchError, classifyGenerationError } = require("./generationErrors");
 
 const UPLOAD_DIR = path.join(__dirname, "..", "..", "uploads");
 const VIDEO_RENDER_CONCURRENCY = 2;
@@ -92,7 +93,7 @@ function startVideoGenerationJob({ sourceText, url }) {
       } catch (err) {
         if (job.status !== "canceled") {
           job.status = "error";
-          job.error = "url_fetch_failed";
+          job.error = classifyFetchError(err).code;
         }
         return;
       }
@@ -112,7 +113,7 @@ function startVideoGenerationJob({ sourceText, url }) {
     } catch (err) {
       if (job.status !== "canceled") {
         job.status = "error";
-        job.error = err.message || "caption_generation_failed";
+        job.error = classifyGenerationError(err).code;
       }
       return;
     }

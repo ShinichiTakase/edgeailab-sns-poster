@@ -2,6 +2,7 @@ const express = require("express");
 const { requireAuth, blockExpiredTrial } = require("../middleware/requireAuth");
 const { generatePostCopy, generatePostCopyVariations } = require("../lib/postCopyGenerator");
 const { fetchUrlText } = require("../lib/urlTextFetcher");
+const { classifyFetchError, classifyGenerationError } = require("../lib/generationErrors");
 
 const router = express.Router();
 
@@ -15,22 +16,15 @@ function validatePlatforms(platforms) {
 }
 
 function handleGenerationError(res, err, logPrefix, customerId) {
-  if (err.message === "anthropic_not_configured") {
-    console.error(`${logPrefix} ANTHROPIC_API_KEY not configured`);
-    return res.status(500).json({ error: "ai_not_configured" });
-  }
-  if (err.message === "ai_refusal") {
-    return res.status(422).json({ error: "ai_refusal" });
-  }
-  if (err.message === "ai_output_truncated") {
-    return res.status(422).json({ error: "ai_output_truncated" });
-  }
-  if (err.constructor && err.constructor.name === "APIConnectionTimeoutError") {
-    console.error(`${logPrefix} customerId=${customerId} timed out:`, err);
-    return res.status(504).json({ error: "ai_timeout" });
-  }
-  console.error(`${logPrefix} customerId=${customerId} failed:`, err);
-  return res.status(502).json({ error: "ai_generation_failed" });
+  const { code, status } = classifyGenerationError(err);
+  console.error(`${logPrefix} customerId=${customerId} failed (${code}):`, err);
+  return res.status(status).json({ error: code });
+}
+
+function handleFetchError(res, err, logPrefix, customerId, url) {
+  const { code } = classifyFetchError(err);
+  console.error(`${logPrefix} fetch failed (${code}) customerId=${customerId} url=${url}:`, err);
+  return res.status(400).json({ error: code });
 }
 
 // 原文（URL未使用）からAI文案生成。投稿自体ではないためトライアル投稿数上限は関係ない。
@@ -72,8 +66,7 @@ router.post(
     try {
       sourceText = await fetchUrlText(url);
     } catch (err) {
-      console.error(`[ai/generate-post-from-url] fetch failed customerId=${req.customer.id} url=${url}:`, err);
-      return res.status(400).json({ error: "url_fetch_failed" });
+      return handleFetchError(res, err, "[ai/generate-post-from-url]", req.customer.id, url);
     }
 
     try {
@@ -129,8 +122,7 @@ router.post(
     try {
       sourceText = await fetchUrlText(url);
     } catch (err) {
-      console.error(`[ai/generate-post-variations-from-url] fetch failed customerId=${req.customer.id} url=${url}:`, err);
-      return res.status(400).json({ error: "url_fetch_failed" });
+      return handleFetchError(res, err, "[ai/generate-post-variations-from-url]", req.customer.id, url);
     }
 
     try {
