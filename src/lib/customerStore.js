@@ -424,6 +424,77 @@ async function listCustomersWithUpcomingTrialEnd(withinDays) {
   return Array.isArray(json.contents) ? json.contents : [];
 }
 
+/**
+ * 「友達に紹介」機能: 紹介者（ログイン中ユーザー）のcustomersレコードに
+ * referrals繰り返しフィールドの1件として招待トークンを追加する。
+ * users繰り返しフィールドへのinvitationToken追加（addInvitedUser）と同じパターン。
+ */
+async function addReferral(customerId, { token, expiresAt, inviteeEmail }) {
+  const customer = await getCustomerById(customerId);
+  if (!customer) {
+    throw new Error(`[customerStore] addReferral: customer not found id=${customerId}`);
+  }
+  const referrals = Array.isArray(customer.referrals) ? customer.referrals : [];
+  const entry = { fieldId: "referrals", token, expiresAt, inviteeEmail };
+  await updateCustomer(customerId, { referrals: [...referrals, entry] });
+  return entry;
+}
+
+/** 紹介トークンに一致するreferrals要素を持つ紹介者customerを探す（被紹介者はまだ存在しないため全件走査）。 */
+async function findCustomerAndReferralByToken(token) {
+  const customers = await listAllCustomers();
+  for (const customer of customers) {
+    const referral = (customer.referrals || []).find((r) => r.token === token);
+    if (referral) return { customer, referral };
+  }
+  return null;
+}
+
+/**
+ * customers.coinsフィールドにamountを加算する（現在値を読み直してから書き込むため、
+ * 呼び出し側で同一customerに対して短時間に複数回呼ぶような使い方は避けること。
+ * 本機能は日次cronからの低頻度呼び出しのみを想定している）。
+ */
+async function addCoins(customerId, amount) {
+  const customer = await getCustomerById(customerId);
+  if (!customer) {
+    throw new Error(`[customerStore] addCoins: customer not found id=${customerId}`);
+  }
+  const next = (Number(customer.coins) || 0) + amount;
+  await updateCustomer(customerId, { coins: next });
+  return next;
+}
+
+/** コイン付与済みフラグを立てる（被紹介者側のcustomersレコード。二重付与防止用）。 */
+async function markReferralCoinGranted(customerId) {
+  return updateCustomer(customerId, { referralCoinGranted: true });
+}
+
+/**
+ * 「本稼働（トライアル期間満了かつ支払い登録済み）」に至ったかどうかの判定。
+ * status:activeはStripe Webhook（checkout.session.completed）でトライアル中でも
+ * 即座にセットされるため、それだけでは「本稼働」とは判定しない。trialEndsAtが
+ * 実際に経過していることも併せて確認する（ユーザーとの合意事項）。
+ */
+function hasConvertedToActivePaidCustomer(customer) {
+  const status = Array.isArray(customer.status) ? customer.status[0] : customer.status;
+  if (status !== "active") return false;
+  if (!customer.trialEndsAt) return false;
+  return new Date(customer.trialEndsAt).getTime() < Date.now();
+}
+
+/**
+ * 紹介経由でサインアップし、まだコイン未付与の被紹介者customer一覧を取得する
+ * （referralCoinGrantCheck.js用）。件数が少ないため全件走査で判定する
+ * （findCustomerAndUserByEmail等、既存の他の全件走査系関数と同じ方針）。
+ */
+async function listPendingReferralConversions() {
+  const customers = await listAllCustomers();
+  return customers.filter(
+    (c) => c.referredByCustomerId && !c.referralCoinGranted && hasConvertedToActivePaidCustomer(c)
+  );
+}
+
 module.exports = {
   getCustomerByEmail,
   customerExistsByEmail,
@@ -450,4 +521,10 @@ module.exports = {
   resetPassword,
   addInvitedUser,
   acceptInvitation,
+  addReferral,
+  findCustomerAndReferralByToken,
+  addCoins,
+  markReferralCoinGranted,
+  hasConvertedToActivePaidCustomer,
+  listPendingReferralConversions,
 };

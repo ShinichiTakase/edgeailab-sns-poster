@@ -16,6 +16,7 @@ const uploadsRoutes = require("./routes/uploads");
 const aiRoutes = require("./routes/ai");
 const schedulesRoutes = require("./routes/schedules");
 const scheduleVideosRoutes = require("./routes/scheduleVideos");
+const referralRoutes = require("./routes/referral");
 
 const app = express();
 app.use("/uploads", express.static(path.join(__dirname, "..", "uploads")));
@@ -33,6 +34,7 @@ app.use(uploadsRoutes);
 app.use(aiRoutes);
 app.use(schedulesRoutes);
 app.use(scheduleVideosRoutes);
+app.use(referralRoutes);
 
 const port = process.env.PORT || 3000;
 app.listen(port, () => {

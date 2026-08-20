@@ -49,6 +49,20 @@ Checkoutの`trial_end`設定は、この33日基準のtrialEndsAtをそのまま
 0 3 * * * cd /opt/project/deploy/xserver-vps && docker compose run --rm sns-poster-threads-refresh >> /var/log/threads-refresh.log 2>&1
 ```
 
+## 「友達に紹介」コイン付与の定期チェック（cron）
+`sns-poster-referral-coin-grant`（[src/scripts/referralCoinGrantCheck.js](src/scripts/referralCoinGrantCheck.js)）も同様に
+`profiles: manual`サービス。被紹介者が「トライアル満了＋支払い登録済み（本稼働）」に
+至ったタイミングで、紹介者の`customers.coins`に`.env`の`FRIEND_COIN`分を加算する
+（[src/lib/customerStore.js](src/lib/customerStore.js)の`hasConvertedToActivePaidCustomer`・
+`listPendingReferralConversions`参照。二重付与防止は被紹介者側`referralCoinGranted`フラグで行う）。
+既存の`sns-poster-schedule-auto-pause-sync`と同様の日次バッチに相乗りさせず、
+判定条件・付与対象（紹介者）が異なる独立の関心事のため専用cronとして分離した。
+実際のcrontab登録は手動実施（コード側の対応は不要）。登録例：
+
+```
+0 4 * * * cd /opt/project/deploy/xserver-vps && docker compose run --rm sns-poster-referral-coin-grant
+```
+
 ## Instagram Reels投稿の削除不可（要FAQ/ヘルプ文書化・未対応）
 Instagram Graph APIは公開済みメディアの削除エンドポイントを提供していない
 （`DELETE /{media-id}`は`Unsupported delete request`エラーになる。実機検証済み、
