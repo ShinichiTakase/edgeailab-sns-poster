@@ -17,9 +17,11 @@ function monthRange(year, month) {
 
 async function listPendingScheduledPosts(customerCode, year, month) {
   const { start, end } = monthRange(year, month);
+  // statusはmicroCMSのセレクトフィールド（配列で書き込まれる。markScheduledPostStatus参照）のため、
+  // [equals]では一致せず常に0件になる（実機で確認済み）。配列値に対する一致には[contains]を使う。
   const filters = [
     `customer_code[equals]${encodeURIComponent(customerCode)}`,
-    `status[equals]pending`,
+    `status[contains]pending`,
     `scheduled_at[greater_than]${encodeURIComponent(start)}`,
     `scheduled_at[less_than]${encodeURIComponent(end)}`,
   ].join("[and]");
@@ -135,8 +137,9 @@ async function createScheduledPost({
 // created_by="test" は手動テストで作った投稿のため、誤って実SNSへ投稿しないよう常に除外する。
 async function listDuePendingScheduledPosts(cutoffIso) {
   const nowIso = new Date().toISOString();
+  // statusはセレクトフィールド（配列書き込み）のため[contains]で一致させる（上のlistPendingScheduledPosts参照）。
   const filters = [
-    "status[equals]pending",
+    "status[contains]pending",
     `scheduled_at[less_than]${encodeURIComponent(nowIso)}`,
     `scheduled_at[greater_than]${encodeURIComponent(cutoffIso)}`,
     "created_by[not_equals]test",
@@ -175,7 +178,8 @@ async function markScheduledPostStatus(id, status) {
 /** スケジュール投稿（post_schedules）から生成された、まだ実行されていない予約を列挙する。
  * 一時停止・削除時に未実行分をまとめて取り消すために使う。 */
 async function listPendingBySourceSchedule(scheduleId) {
-  const filters = [`source_schedule_id[equals]${encodeURIComponent(scheduleId)}`, "status[equals]pending"].join("[and]");
+  // statusはセレクトフィールド（配列書き込み）のため[contains]で一致させる（listPendingScheduledPosts参照）。
+  const filters = [`source_schedule_id[equals]${encodeURIComponent(scheduleId)}`, "status[contains]pending"].join("[and]");
   const all = [];
   const limit = 100;
   let offset = 0;
