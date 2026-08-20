@@ -91,9 +91,13 @@ function serializeSchedule(schedule, textCount) {
 }
 
 // 未実行分（source_schedule_id一致・pending）を取り消す。一時停止・削除の両方から使う。
+// microCMSへの書き込みは並行数が多いと429（Too many requests）で弾かれるため
+// （texts/bulk作成時に実際に発生していた）、1件ずつ順番に削除する。
 async function cancelPendingGeneratedPosts(scheduleId) {
   const pending = await listPendingBySourceSchedule(scheduleId);
-  await Promise.all(pending.map((p) => deleteScheduledPost(p.id)));
+  for (const p of pending) {
+    await deleteScheduledPost(p.id);
+  }
   return pending.length;
 }
 
@@ -227,7 +231,10 @@ router.delete("/api/schedules/:id", requireAuth, async (req, res) => {
     }
     await cancelPendingGeneratedPosts(schedule.id);
     const texts = await scheduleTextStore.listScheduleTexts(schedule.id);
-    await Promise.all(texts.map((t) => scheduleTextStore.deleteScheduleText(t.id)));
+    // microCMSへの書き込みは並行数が多いと429で弾かれるため、1件ずつ順番に削除する。
+    for (const t of texts) {
+      await scheduleTextStore.deleteScheduleText(t.id);
+    }
     await scheduleStore.deleteSchedule(schedule.id);
     res.json({ ok: true });
   } catch (err) {
@@ -307,9 +314,14 @@ router.post(
           return res.status(400).json({ error: validationError });
         }
       }
-      const created = await Promise.all(
-        entries.map((entry) =>
-          scheduleTextStore.createScheduleText({
+      // microCMSへの書き込みは並行数が多いと429（Too many requests）で弾かれるため
+      // （10件同時のPromise.allで実際に発生していた）、1件ずつ順番に作成する。
+      // 途中で失敗した場合は、それまでに作成済みの分をロールバック（削除）してから
+      // エラーを返す。中途半端な件数だけ保存された状態で終わらせないため。
+      const created = [];
+      try {
+        for (const entry of entries) {
+          const record = await scheduleTextStore.createScheduleText({
             scheduleId: schedule.id,
             xText: entry.xText,
             threadsText: entry.threadsText,
@@ -317,9 +329,15 @@ router.post(
             instagramText: entry.instagramText,
             instagramImageUrl: entry.instagramImageUrl,
             instagramVideoUrl: entry.instagramVideoUrl,
-          })
-        )
-      );
+          });
+          created.push(record);
+        }
+      } catch (err) {
+        for (const c of created) {
+          await scheduleTextStore.deleteScheduleText(c.id).catch(() => {});
+        }
+        throw err;
+      }
       res.json({ ids: created.map((c) => c.id) });
     } catch (err) {
       console.error(`[schedules] bulk create text failed id=${req.params.id}:`, err);

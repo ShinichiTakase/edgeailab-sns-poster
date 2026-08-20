@@ -32,9 +32,20 @@ const PLATFORM_GUIDANCE = {
     "URL誘導に文字数を割かないこと。ハッシュタグは3〜5個程度を末尾にまとめて付けること。",
 };
 
-function buildSystemPrompt(platforms, url) {
-  const guidance = platforms.map((p) => `- ${PLATFORM_GUIDANCE[p]}`).join("\n");
-  const urlInstruction = url
+// スケジュール投稿のInstagramリール動画キャプション専用のガイダンス。動画内に焼き込む
+// オンスクリーンテキストを兼ねるため、通常のフィード投稿向け（PLATFORM_GUIDANCE.instagram）
+// とは要件が異なる（ハッシュタグは画面表示上不要、URL誘導も動画内では意味をなさない）。
+const INSTAGRAM_REEL_GUIDANCE =
+  "Instagramリール向け: この文章は動画に焼き込むオンスクリーンテキスト（画面表示用の短いキャプション）です。" +
+  "1〜3文程度の簡潔な文章にまとめ、原文の詳細を長々と展開しないこと。" +
+  "ハッシュタグは付けないこと（動画内テキストとして画面表示されるため不要）。" +
+  "URLへの言及や「プロフィールのリンクから」等の誘導文言も含めないこと。";
+
+function buildSystemPrompt(platforms, url, { reelMode = false } = {}) {
+  const guidance = platforms
+    .map((p) => `- ${p === "instagram" && reelMode ? INSTAGRAM_REEL_GUIDANCE : PLATFORM_GUIDANCE[p]}`)
+    .join("\n");
+  const urlInstruction = url && !reelMode
     ? "\n各プラットフォームの投稿文の末尾に、必ず次のURLをそのまま含めてください: " +
       url +
       "\nただしInstagramは例外とし、URLを直接記載せず「プロフィールのリンクから」のような案内文言に留めてください" +
@@ -47,7 +58,7 @@ function buildSystemPrompt(platforms, url) {
       "要点を絞って再構成してください。原文をそのまま詳細に展開した長文にはしないこと。",
     "冒頭の1〜2文で、読者が最も知りたいポイント（フック）を提示してください。" +
       "特にInstagramとThreadsは冒頭で読者が続きを読むかどうかが決まるため重要です。",
-    "各プラットフォームの特性を踏まえ、必要に応じてハッシュタグを付与してください。",
+    reelMode ? null : "各プラットフォームの特性を踏まえ、必要に応じてハッシュタグを付与してください。",
     guidance,
     urlInstruction,
     "出力は指定されたJSON形式のみとし、説明文や前置き・後書きは一切含めないでください。",
@@ -115,8 +126,8 @@ async function generatePostCopy({ sourceText, platforms, url }) {
   return JSON.parse(textBlock.text);
 }
 
-function buildVariationsSystemPrompt(platforms, url, count) {
-  const base = buildSystemPrompt(platforms, url);
+function buildVariationsSystemPrompt(platforms, url, count, { reelMode = false } = {}) {
+  const base = buildSystemPrompt(platforms, url, { reelMode });
   return (
     base +
     `\n各プラットフォームにつき、投稿文を${count}パターン生成してください。` +
@@ -172,6 +183,13 @@ function convertVariationsToArrays(raw, platforms, count) {
  * generatePostCopyVariationsから並列に呼び出される。
  */
 async function generateVariationsForPlatform(anthropic, { sourceText, platform, url, count }) {
+  // schedule.platformsからInstagramを除いたテキストタブ（x/threads/facebook）は
+  // このバリエーション生成を使わない（textPlatforms()参照）。そのためplatform==="instagram"
+  // でこの関数が呼ばれるのは、videoGenerationJobStore.jsのリール動画キャプション生成のみ
+  // （現状の呼び出し元はここ一箇所）。将来、リール以外の用途でInstagramのバリエーション生成が
+  // 必要になった場合はこの前提が崩れるため、その際は呼び出し元からreelMode相当を明示的に
+  // 渡す形に変更すること。
+  const reelMode = platform === "instagram";
   const response = await anthropic.messages.create(
     {
       model: MODEL,
@@ -181,7 +199,7 @@ async function generateVariationsForPlatform(anthropic, { sourceText, platform, 
         effort: "low",
         format: { type: "json_schema", schema: buildVariationsSchema([platform], count) },
       },
-      system: buildVariationsSystemPrompt([platform], url, count),
+      system: buildVariationsSystemPrompt([platform], url, count, { reelMode }),
       messages: [{ role: "user", content: `【原文】\n${sourceText}` }],
     },
     { timeout: VARIATIONS_REQUEST_TIMEOUT_MS, maxRetries: 0 }

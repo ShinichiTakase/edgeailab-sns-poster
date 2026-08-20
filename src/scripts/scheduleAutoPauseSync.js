@@ -17,9 +17,13 @@ const { listPendingBySourceSchedule, deleteScheduledPost } = require("../lib/sch
 const { getCustomerById, isTrialExpiredWithoutPayment } = require("../lib/customerStore");
 const { logInfo, logError } = require("../lib/logger").createLogger("schedule-auto-pause-sync.log");
 
+// microCMSへの書き込みは並行数が多いと429（Too many requests）で弾かれるため
+// （routes/schedules.jsのtexts/bulk作成時に実際に発生していた）、1件ずつ順番に削除する。
 async function cancelPendingGeneratedPosts(scheduleId) {
   const pending = await listPendingBySourceSchedule(scheduleId);
-  await Promise.all(pending.map((p) => deleteScheduledPost(p.id)));
+  for (const p of pending) {
+    await deleteScheduledPost(p.id);
+  }
   return pending.length;
 }
 

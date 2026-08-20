@@ -158,12 +158,15 @@ function wrapCaption(ctx, text, maxWidth, fontSize) {
 }
 
 function fitCaption(ctx, text, maxWidth, maxHeight) {
-  let fontSize = 68;
-  const minSize = 32;
+  // キャプション文字が小さすぎるとの指摘のため、初期サイズ・最小サイズとも約1.5倍にした
+  // （68→102, 32→48）。CAPTION_AREAの高さ（HEIGHT-840=1080px）には十分な余裕があるため、
+  // 収まらない場合の縮小ロジック（このループ）はそのまま機能する。
+  let fontSize = 102;
+  const minSize = 48;
   let lines = wrapCaption(ctx, text, maxWidth, fontSize);
   let lineHeight = Math.round(fontSize * 1.45);
   while (fontSize > minSize && lines.length * lineHeight > maxHeight) {
-    fontSize -= 4;
+    fontSize -= 6;
     lines = wrapCaption(ctx, text, maxWidth, fontSize);
     lineHeight = Math.round(fontSize * 1.45);
   }
