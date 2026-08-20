@@ -237,6 +237,12 @@ function drawSlideIn(ctx, { lines, fontSize, lineHeight, textColor, activeT }) {
     const t = (activeT - 0.85) / 0.15;
     opacity = Math.max(0, 1 - t);
     offsetY = -t * 40;
+  } else {
+    // フェードイン・アウトの間（全体の70%）は完全に静止して見えていたため
+    // （シークバーを動かしても変化がないという指摘の実体）、ごく緩やかな
+    // 上下の揺れを常時加えて静止画に見えないようにする。
+    const driftT = (activeT - 0.15) / 0.7;
+    offsetY = Math.sin(driftT * Math.PI * 2) * 8;
   }
 
   ctx.save();
