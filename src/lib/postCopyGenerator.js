@@ -3,7 +3,10 @@
 // 直接JSONとして受け取り、テキストパースの脆さを避ける。
 const { getAnthropic } = require("./anthropicClient");
 
-const MODEL = "claude-opus-5";
+// 体感速度改善のためclaude-opus-5からclaude-sonnet-5へ切替（2026-08-20）。
+// URL指定生成の品質基準（記事内容を正確に反映すること）を満たすか実測比較の
+// うえ採用（劣化する場合はHaikuまでは下げずSonnet 5に留める、が判断基準）。
+const MODEL = "claude-sonnet-5";
 // 同期HTTPリクエストでユーザーが応答を待っているため、SDKデフォルトの10分は長すぎる。
 // 実測でAnthropic APIへの単純な呼び出しでも3〜12秒程度のばらつきが見られたため、
 // 30秒では実運用のリクエスト（原文が長い・複数SNS分を一度に生成等）で不足する
