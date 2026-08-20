@@ -45,6 +45,13 @@ function classifyGenerationError(err) {
   if (err && err.constructor && err.constructor.name === "APIConnectionTimeoutError") {
     return { code: "ai_timeout", status: 504 };
   }
+  // APIConnectionTimeoutErrorのサブクラスであるAPIConnectionError（ETIMEDOUT/ECONNREFUSED/
+  // DNS失敗等、AI側への接続自体が失敗したケース）。上のタイムアウト判定より後段に置くのは、
+  // APIConnectionTimeoutErrorがAPIConnectionErrorを継承しているため、先にタイムアウト固有の
+  // 判定を通す必要があるため。
+  if (err && err.constructor && err.constructor.name === "APIConnectionError") {
+    return { code: "ai_connection_error", status: 502 };
+  }
   // Anthropic SDKのAPIErrorサブクラスはHTTPステータスを.statusに保持する
   // （RateLimitError=429固定、InternalServerError=5xx）。型でのimportより、この方が
   // SDKのバージョン差異に依存しない。
