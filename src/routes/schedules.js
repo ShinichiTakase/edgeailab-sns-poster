@@ -269,6 +269,7 @@ router.get("/api/schedules/:id/texts", requireAuth, async (req, res) => {
         instagramText: t.instagram_text || "",
         instagramImageUrl: t.instagram_image_url || "",
         instagramVideoUrl: t.instagram_video_url || "",
+        sourceExcerpt: t.source_excerpt || "",
         createdAt: t.createdAt,
       })),
     });
@@ -308,6 +309,9 @@ router.post(
       if (entries.length !== getDocsNumber()) {
         return res.status(400).json({ error: "invalid_entry_count" });
       }
+      // 投稿文章一覧での識別しやすさのため、生成元（URLまたは原文の抜粋）を各エントリに
+      // 記録する。1回の一括登録は同じ生成元から作られるため、バッチ単位で1つ受け取る。
+      const sourceExcerpt = typeof req.body?.sourceExcerpt === "string" ? req.body.sourceExcerpt.slice(0, 200) : "";
       for (const entry of entries) {
         const validationError = validateTextInput(schedule, entry || {});
         if (validationError) {
@@ -329,6 +333,7 @@ router.post(
             instagramText: entry.instagramText,
             instagramImageUrl: entry.instagramImageUrl,
             instagramVideoUrl: entry.instagramVideoUrl,
+            sourceExcerpt,
           });
           created.push(record);
         }
@@ -362,6 +367,7 @@ router.post("/api/schedules/:id/texts", requireAuth, requireVerified, blockExpir
       facebookText: body.facebookText,
       instagramText: body.instagramText,
       instagramImageUrl: body.instagramImageUrl,
+      sourceExcerpt: typeof body.sourceExcerpt === "string" ? body.sourceExcerpt.slice(0, 200) : "",
     });
     res.json({ id: created.id });
   } catch (err) {

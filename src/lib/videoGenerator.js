@@ -164,11 +164,14 @@ function fitCaption(ctx, text, maxWidth, maxHeight) {
   let fontSize = 102;
   const minSize = 48;
   let lines = wrapCaption(ctx, text, maxWidth, fontSize);
-  let lineHeight = Math.round(fontSize * 1.45);
+  // 行間は1.45倍だったが、やや長めのキャプションでminSizeに張り付いたまま
+  // 文字が小さいまま表示される事例があったため1.3倍に詰め、同じ高さでより
+  // 多くの行数を許容できるようにした（CAPTION_AREA拡張とあわせての対応）。
+  let lineHeight = Math.round(fontSize * 1.3);
   while (fontSize > minSize && lines.length * lineHeight > maxHeight) {
     fontSize -= 6;
     lines = wrapCaption(ctx, text, maxWidth, fontSize);
-    lineHeight = Math.round(fontSize * 1.45);
+    lineHeight = Math.round(fontSize * 1.3);
   }
   // 極端に長い文章は表示しきれないため、収まる行数までで打ち切る（保存前にプレビューできるため許容）。
   const maxLines = Math.max(1, Math.floor(maxHeight / lineHeight));
@@ -181,7 +184,10 @@ function easeOutCubic(t) {
 
 // ---------- フレーム描画 ----------
 
-const CAPTION_AREA = { top: 420, bottom: HEIGHT - 420, left: 90, right: WIDTH - 90 };
+// 上下マージンを420→320/360に詰め、キャプションが使える高さを1080→1240pxに拡張した
+// （フォントが最小サイズに張り付いたまま表示される事例の対策。フッター(FOOTER_Y=1790)
+// との間隔は十分確保できている）。
+const CAPTION_AREA = { top: 320, bottom: HEIGHT - 360, left: 90, right: WIDTH - 90 };
 const FOOTER_Y = HEIGHT - 130;
 
 function drawFooter(ctx, textColor) {

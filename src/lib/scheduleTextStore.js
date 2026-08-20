@@ -41,6 +41,7 @@ async function createScheduleText({
   instagramText,
   instagramImageUrl,
   instagramVideoUrl,
+  sourceExcerpt,
 }) {
   const res = await microcmsFetch(`/schedule_texts`, {
     method: "POST",
@@ -52,6 +53,7 @@ async function createScheduleText({
       instagram_text: instagramText || "",
       instagram_image_url: instagramImageUrl || "",
       instagram_video_url: instagramVideoUrl || "",
+      source_excerpt: sourceExcerpt || "",
     }),
   });
   if (!res.ok) {
