@@ -9,10 +9,10 @@ const { renderVideo } = require("./videoGenerator");
 const { generatePostCopyVariations } = require("./postCopyGenerator");
 const { fetchUrlText } = require("./urlTextFetcher");
 const { classifyFetchError, classifyGenerationError } = require("./generationErrors");
+const { getDocsNumber } = require("./generationConfig");
 
 const UPLOAD_DIR = path.join(__dirname, "..", "..", "uploads");
 const VIDEO_RENDER_CONCURRENCY = 2;
-const SLOT_COUNT = 10;
 
 const jobs = new Map();
 
@@ -26,7 +26,7 @@ function createJob() {
     id: jobId,
     status: "running", // running | done | canceled | error
     error: null,
-    slots: Array.from({ length: SLOT_COUNT }, (_, index) => ({
+    slots: Array.from({ length: getDocsNumber() }, (_, index) => ({
       index,
       status: "pending", // pending | rendering | done | canceled | error
       url: null,
@@ -114,7 +114,7 @@ function startVideoGenerationJob({ sourceText, url }) {
         sourceText: resolvedSourceText,
         platforms: ["instagram"],
         url,
-        count: SLOT_COUNT,
+        count: getDocsNumber(),
       });
       captions = variations.instagram;
     } catch (err) {
@@ -186,4 +186,4 @@ async function regenerateSingleVideo({ caption }) {
   return { url: publicUrlFor(filename), style };
 }
 
-module.exports = { startVideoGenerationJob, getJob, serializeJob, cancelJob, regenerateSingleVideo, SLOT_COUNT };
+module.exports = { startVideoGenerationJob, getJob, serializeJob, cancelJob, regenerateSingleVideo };

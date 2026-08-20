@@ -7,6 +7,7 @@ const scheduleStore = require("../lib/scheduleStore");
 const scheduleTextStore = require("../lib/scheduleTextStore");
 const { listPendingBySourceSchedule, deleteScheduledPost } = require("../lib/scheduledPostStore");
 const { isSlotWideEnough, dateOnly } = require("../lib/scheduleFiring");
+const { getDocsNumber } = require("../lib/generationConfig");
 
 const router = express.Router();
 
@@ -290,10 +291,9 @@ function validateTextInput(schedule, body) {
   return null;
 }
 
-// スケジュール投稿の「投稿文章を追加」画面から、1回の操作でBULK_TEXT_COUNT件のエントリを
-// まとめて作成する（ラウンドロビン用のバリエーションを一括登録するため）。
-const BULK_TEXT_COUNT = 10;
-
+// スケジュール投稿の「投稿文章を追加」画面から、1回の操作でgetDocsNumber()件のエントリを
+// まとめて作成する（ラウンドロビン用のバリエーションを一括登録するため）。フロントエンドの
+// 描画数（schedule-detail.htmlのBULK_COUNT、GET /api/ai/configから取得）と一致させる必要がある。
 router.post(
   "/api/schedules/:id/texts/bulk",
   requireAuth,
@@ -305,7 +305,7 @@ router.post(
       const schedule = await loadOwnedSchedule(req, res);
       if (!schedule) return;
       const entries = Array.isArray(req.body?.entries) ? req.body.entries : [];
-      if (entries.length !== BULK_TEXT_COUNT) {
+      if (entries.length !== getDocsNumber()) {
         return res.status(400).json({ error: "invalid_entry_count" });
       }
       for (const entry of entries) {
