@@ -10,7 +10,7 @@
 // このカードは customer.invoice_settings.default_payment_method と一致していれば
 // 暗黙のprimaryとして扱う（互換性フォールバック）。
 function resolvePriorities(paymentMethods, defaultPaymentMethodId) {
-  return paymentMethods.map((pm) => {
+  const initial = paymentMethods.map((pm) => {
     const explicit = pm.metadata && pm.metadata.priority;
     if (explicit === "primary" || explicit === "backup") {
       return { paymentMethod: pm, priority: explicit, isLegacyDefault: false };
@@ -18,11 +18,26 @@ function resolvePriorities(paymentMethods, defaultPaymentMethodId) {
     if (pm.id === defaultPaymentMethodId) {
       return { paymentMethod: pm, priority: "primary", isLegacyDefault: true };
     }
-    // 通常発生しない想定（2枚目以降は必ずconfirmエンドポイントでpriorityを付与するため）。
-    // 万一メタデータ欠損のカードが残っていた場合はbackup扱いとする（primaryを二重に
-    // 扱わないためのフェイルセーフ）。
-    return { paymentMethod: pm, priority: "backup", isLegacyDefault: false };
+    // 未確定（後段で判定する）
+    return { paymentMethod: pm, priority: null, isLegacyDefault: false };
   });
+
+  // 明示metadataでも default_payment_method 一致でもprimaryが1件も定まらなかった場合
+  // （= default_payment_method自体が未設定/既に存在しないカードを指している「完全に古い」
+  // 顧客）。この状態でカードが1枚以上あるなら、先頭の1枚を暗黙のprimaryとして扱う
+  // （そうしないと、そのカードは永久にbackup扱いのまま自己修復もされずUIにprimaryが
+  // 一つも表示されなくなるため）。
+  if (!initial.some((r) => r.priority === "primary")) {
+    const first = initial.find((r) => r.priority === null);
+    if (first) {
+      first.priority = "primary";
+      first.isLegacyDefault = true;
+    }
+  }
+
+  // 残った未確定は全てbackup扱いにする（通常はconfirmエンドポイントが必ずpriorityを
+  // 付与するため発生しない想定。メタデータ欠損時のフェイルセーフ）。
+  return initial.map((r) => (r.priority === null ? { ...r, priority: "backup" } : r));
 }
 
 function findPrimary(resolved) {

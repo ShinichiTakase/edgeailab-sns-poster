@@ -332,6 +332,21 @@ router.get("/api/billing/payment-methods", requireAuth, async (req, res) => {
         )
     );
 
+    // metadata上のprimaryとStripe側のdefault_payment_methodが食い違っている場合
+    // （Stripeダッシュボードでの直接操作等、当アプリのAPIを経由しない変更が原因で起こりうる）、
+    // 実際に請求時に使われるのはStripe側のdefault_payment_methodのため、表示（metadata）に
+    // 合わせて同期する。失敗しても一覧表示自体は継続する。
+    const primaryEntry = resolved.find((r) => r.priority === "primary");
+    if (primaryEntry && !primaryEntry.isLegacyDefault && primaryEntry.paymentMethod.id !== defaultPaymentMethodId) {
+      await stripe.customers
+        .update(req.customer.stripeCustomerId, {
+          invoice_settings: { default_payment_method: primaryEntry.paymentMethod.id },
+        })
+        .catch((err) => {
+          console.error(`[billing/payment-methods] default_payment_method drift sync failed customerId=${req.customer.id}:`, err);
+        });
+    }
+
     const cards = resolved
       .map((r) => ({
         id: r.paymentMethod.id,
@@ -382,18 +397,19 @@ router.delete("/api/billing/payment-methods/:paymentMethodId", requireAuth, asyn
     await stripe.paymentMethods.detach(paymentMethodId);
 
     const remaining = resolved.filter((r) => r.paymentMethod.id !== paymentMethodId);
-    if (deletedWasPrimary) {
-      const promoted = remaining[0] || null;
-      if (promoted) {
-        await stripe.paymentMethods.update(promoted.paymentMethod.id, { metadata: { priority: "primary" } });
-        await stripe.customers.update(req.customer.stripeCustomerId, {
-          invoice_settings: { default_payment_method: promoted.paymentMethod.id },
-        });
-      } else {
-        await stripe.customers.update(req.customer.stripeCustomerId, {
-          invoice_settings: { default_payment_method: null },
-        });
-      }
+    if (remaining.length === 0) {
+      // 削除したカードがprimary/backupいずれのタグだったかに関わらず、0枚になった場合は
+      // default_payment_methodを必ずクリアする。タグ付けがStripe側の実データと食い違って
+      // いた場合（Dashboard操作等での drift）でも、detach済みのIDを参照したまま残さないため。
+      await stripe.customers.update(req.customer.stripeCustomerId, {
+        invoice_settings: { default_payment_method: null },
+      });
+    } else if (deletedWasPrimary) {
+      const promoted = remaining[0];
+      await stripe.paymentMethods.update(promoted.paymentMethod.id, { metadata: { priority: "primary" } });
+      await stripe.customers.update(req.customer.stripeCustomerId, {
+        invoice_settings: { default_payment_method: promoted.paymentMethod.id },
+      });
     }
 
     res.json({ ok: true });
@@ -421,6 +437,27 @@ async function handleInvoicePaymentFailed(stripe, event) {
     return;
   }
 
+  // Webhookイベントの再送対策。invoices.payのidempotencyKeyは「二重課金」は防ぐが、
+  // 再送時にこのハンドラ自体は最初から最後まで再実行されるため、通知メールは
+  // ガードなしでは重複送信されてしまう。event.dataは再送時も生成時点のスナップショットの
+  // ままなので、必ずinvoiceを再取得して「現在の」metadataを見る（event.data.object.metadataを
+  // 見ると、初回処理で書き込んだマーカーが再送イベントに反映されず永久に検知できない）。
+  const freshInvoice = await stripe.invoices.retrieve(invoice.id);
+  if (freshInvoice.metadata && freshInvoice.metadata.backup_retry_event_id === event.id) {
+    console.info(`[billing/webhook] invoice.payment_failed: event ${event.id} already processed for invoice ${invoice.id}, skipping (redelivery)`);
+    return;
+  }
+  // 通常Stripeは支払い済みのinvoiceに対してinvoice.payment_failedを再送しないが、古い
+  // イベントの手動再送（Stripeダッシュボードの「イベントを再送信」等）で、既に別経路
+  // （バックアップ課金・顧客による直接支払い等）で解決済みのinvoiceに対してこのハンドラが
+  // 呼ばれる可能性はある。invoices.payを既払いinvoiceに呼ぶとStripe側がエラーを返し、
+  // 下のcatchで「予期しないエラー」として誤って運用アラートが飛んでしまうため、ここで
+  // 事前に弾く。
+  if (freshInvoice.status === "paid") {
+    console.info(`[billing/webhook] invoice.payment_failed: invoice ${invoice.id} already paid, skipping`);
+    return;
+  }
+
   const [cards, stripeCustomer] = await Promise.all([
     stripe.paymentMethods.list({ customer: stripeCustomerId, type: "card" }),
     stripe.customers.retrieve(stripeCustomerId),
@@ -444,6 +481,13 @@ async function handleInvoicePaymentFailed(stripe, event) {
       { idempotencyKey: `invoice-backup-retry:${event.id}` }
     );
     console.info(`[billing/webhook] backup card charge succeeded customerId=${customer.id} invoiceId=${invoice.id}`);
+
+    // 通知メール送信の前にマーカーを書き込む。ここで処理が落ちればメール未送信のまま
+    // 終わる可能性はあるが（許容）、逆順にすると再送時にメール二重送信を防げなくなるため、
+    // 「稀に送られない」より「絶対に二重送信しない」を優先する。
+    await stripe.invoices.update(invoice.id, {
+      metadata: { ...freshInvoice.metadata, backup_retry_event_id: event.id },
+    });
 
     const mailResult = await sendCustomerMail({
       toEmail: customer.email,
