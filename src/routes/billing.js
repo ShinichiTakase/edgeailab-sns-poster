@@ -702,4 +702,10 @@ async function predictFromScheduledPosts(stripe, customer, prices, year, month) 
   return { basicFee, usageFee, xSurcharge, total: basicFee + usageFee + xSurcharge };
 }
 
+// handleInvoicePaymentFailedはExpressルートには直接ならない内部関数だが、
+// 自動テスト（src/routes/billing.webhook.test.js）から直接呼び出せるよう、Routerオブジェクト
+// （関数）にプロパティとして公開する。Router自体はapp.use(billingRoutes)でそのまま使われるため、
+// この公開はExpressの動作に影響しない。
+router.handleInvoicePaymentFailed = handleInvoicePaymentFailed;
+
 module.exports = router;
