@@ -175,3 +175,27 @@ test("DELETE: 有効なサブスクリプションがある間、最後の1枚�
 
   TEST_CUSTOMER.stripeSubscriptionId = null; // 後続テストへの影響を避ける
 });
+
+test("POST swap: primary/backupを入れ替え、default_payment_methodも新primaryに同期される", async () => {
+  const primary = card("pm_swap_primary", "visa", "primary");
+  const backup = card("pm_swap_backup", "mastercard", "backup");
+  currentFakeStripe = createFakeStripeAccount({ cards: [primary, backup], defaultPaymentMethodId: "pm_swap_primary" });
+
+  const res = await authedRequest("POST", "/api/billing/payment-methods/swap");
+
+  assert.equal(res.status, 200);
+  assert.equal(currentFakeStripe._state.cards.get("pm_swap_primary").metadata.priority, "backup");
+  assert.equal(currentFakeStripe._state.cards.get("pm_swap_backup").metadata.priority, "primary");
+  assert.equal(currentFakeStripe._state.defaultPaymentMethodId, "pm_swap_backup");
+});
+
+test("POST swap: カードが1枚しかない場合は400", async () => {
+  const only = card("pm_swap_only", "visa", "primary");
+  currentFakeStripe = createFakeStripeAccount({ cards: [only], defaultPaymentMethodId: "pm_swap_only" });
+
+  const res = await authedRequest("POST", "/api/billing/payment-methods/swap");
+
+  assert.equal(res.status, 400);
+  assert.equal(res.body.error, "swap_requires_two_cards");
+  assert.equal(currentFakeStripe._state.cards.get("pm_swap_only").metadata.priority, "primary", "変更されていないこと");
+});

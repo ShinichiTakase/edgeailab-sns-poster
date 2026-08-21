@@ -10,7 +10,7 @@ const { listSchedulesForCustomer } = require("../lib/scheduleStore");
 const { listScheduleTexts } = require("../lib/scheduleTextStore");
 const { estimateScheduleFirings } = require("../lib/scheduleForecast");
 const { parseMonthParam, isPastMonth } = require("../lib/monthParam");
-const { resolvePriorities, findBackup } = require("../lib/paymentMethodPriority");
+const { resolvePriorities, findPrimary, findBackup } = require("../lib/paymentMethodPriority");
 const { BACKUP_CARD_CHARGED_EMAIL } = require("../lib/emailTemplates");
 const { sendCustomerMail } = require("../lib/customerMailer");
 const { notifyFailure } = require("../lib/mailer");
@@ -416,6 +416,47 @@ router.delete("/api/billing/payment-methods/:paymentMethodId", requireAuth, asyn
   } catch (err) {
     console.error(`[billing/payment-methods] delete failed customerId=${req.customer.id} paymentMethodId=${paymentMethodId}:`, err);
     res.status(500).json({ error: "stripe_error", message: "カードの削除に失敗しました。しばらくしてから再度お試しください。" });
+  }
+});
+
+// プライマリ/バックアップの入れ替え。カード番号・有効期限の「編集」は不可という要件は
+// Stripe側でカード自体を書き換えられないことに由来するもので、優先度（当アプリ側の
+// metadata）の入れ替えはその制約とは無関係のため、削除→再登録を経由せずその場で行える。
+// 2枚registered時のみ意味を持つ操作。
+router.post("/api/billing/payment-methods/swap", requireAuth, async (req, res) => {
+  if (!requireAdminRole(req, res)) return;
+  const stripe = getStripe();
+  if (!stripe) {
+    return res.status(500).json({ error: "stripe_not_configured" });
+  }
+  if (!req.customer.stripeCustomerId) {
+    return res.status(400).json({ error: "swap_requires_two_cards", message: "入れ替えにはカードが2枚登録されている必要があります。" });
+  }
+
+  try {
+    const [list, stripeCustomer] = await Promise.all([
+      stripe.paymentMethods.list({ customer: req.customer.stripeCustomerId, type: "card" }),
+      stripe.customers.retrieve(req.customer.stripeCustomerId),
+    ]);
+    const defaultPaymentMethodId = stripeCustomer.invoice_settings && stripeCustomer.invoice_settings.default_payment_method;
+    const resolved = resolvePriorities(list.data, defaultPaymentMethodId);
+
+    if (resolved.length !== 2) {
+      return res.status(400).json({ error: "swap_requires_two_cards", message: "入れ替えにはカードが2枚登録されている必要があります。" });
+    }
+    const primary = findPrimary(resolved);
+    const backup = findBackup(resolved);
+
+    await stripe.paymentMethods.update(primary.paymentMethod.id, { metadata: { priority: "backup" } });
+    await stripe.paymentMethods.update(backup.paymentMethod.id, { metadata: { priority: "primary" } });
+    await stripe.customers.update(req.customer.stripeCustomerId, {
+      invoice_settings: { default_payment_method: backup.paymentMethod.id },
+    });
+
+    res.json({ ok: true });
+  } catch (err) {
+    console.error(`[billing/payment-methods] swap failed customerId=${req.customer.id}:`, err);
+    res.status(500).json({ error: "stripe_error", message: "入れ替えに失敗しました。しばらくしてから再度お試しください。" });
   }
 });
 
