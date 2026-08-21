@@ -83,6 +83,16 @@ function findDuplicateOwner(platform, identifiers, excludeSlug) {
   return null;
 }
 
+// platformのトークンエントリから表示用アカウント名を組み立てる。SNS連携画面の表示と、
+// 投稿ログ（posting_logs.account_name）への記録の両方で使う共通ロジック（重複実装の防止）。
+// facebookは複数ページを保持しうるため連結表示、他はusername（なければuser_id）を表示。
+function accountNameFor(platform, tokenEntry) {
+  if (platform === "facebook") {
+    return (tokenEntry.pages || []).map((p) => p.pageName).join(", ") || null;
+  }
+  return tokenEntry.username || tokenEntry.user_id || null;
+}
+
 module.exports = {
   loadStore,
   saveStore,
@@ -91,4 +101,5 @@ module.exports = {
   deletePlatformTokensBySlug,
   deletePlatformTokensByUserId,
   findDuplicateOwner,
+  accountNameFor,
 };

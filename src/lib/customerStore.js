@@ -177,11 +177,25 @@ async function findCustomerAndUserByInvitationToken(token) {
   return null;
 }
 
+// role/invitationStatusはmicroCMSのselectフィールド（配列で書き込まれる）のため、
+// 読み出し側は常にこのヘルパーで先頭要素を取り出す（team.js等、複数箇所で共有する）。
+function roleOf(user) {
+  return Array.isArray(user.role) ? user.role[0] : user.role;
+}
+function invitationStatusOf(user) {
+  return Array.isArray(user.invitationStatus) ? user.invitationStatus[0] : user.invitationStatus;
+}
+
 /**
  * 管理者が新しいメンバーを招待する。userId/passwordHash未設定のまま
  * users配列に要素を追加し、招待承諾（acceptInvitation）を待つ状態にする。
+ * name: 招待時に管理者が入力する氏名。approverIds: role="編集者"の場合のみ、
+ * このユーザーの投稿を承認する既存メンバーのuserId配列（JSON文字列で保持）。
  */
-async function addInvitedUser(customerId, { email, role, invitedByUserId, invitationToken, invitationExpiresAt }) {
+async function addInvitedUser(
+  customerId,
+  { email, name, role, approverIds, invitedByUserId, invitationToken, invitationExpiresAt }
+) {
   const customer = await getCustomerById(customerId);
   if (!customer) {
     throw new Error(`[customerStore] addInvitedUser: customer not found id=${customerId}`);
@@ -190,7 +204,9 @@ async function addInvitedUser(customerId, { email, role, invitedByUserId, invita
   const invitedUser = {
     fieldId: "users",
     email: email.trim(),
+    name: name || "",
     role: [role],
+    approverIds: role === "編集者" ? JSON.stringify(approverIds || []) : "",
     invitedBy: invitedByUserId,
     invitationToken,
     invitationExpiresAt,
@@ -198,6 +214,37 @@ async function addInvitedUser(customerId, { email, role, invitedByUserId, invita
   };
   await updateCustomer(customerId, { users: [...users, invitedUser] });
   return invitedUser;
+}
+
+/**
+ * 既存のpending中招待（同一users要素）をトークン再発行して上書きする（再招待・実質再送）。
+ * 配列に重複要素を追加しないよう、既存要素をそのまま更新する。
+ */
+async function reissueInvitation(customerId, email, { name, role, approverIds, invitedByUserId, invitationToken, invitationExpiresAt }) {
+  const customer = await getCustomerById(customerId);
+  if (!customer) {
+    throw new Error(`[customerStore] reissueInvitation: customer not found id=${customerId}`);
+  }
+  const target = email.trim().toLowerCase();
+  const users = Array.isArray(customer.users) ? customer.users : [];
+  const index = users.findIndex((u) => (u.email || "").toLowerCase() === target);
+  if (index === -1) {
+    throw new Error(`[customerStore] reissueInvitation: user not found email=${email}`);
+  }
+  const updatedUser = {
+    ...users[index],
+    name: name || "",
+    role: [role],
+    approverIds: role === "編集者" ? JSON.stringify(approverIds || []) : "",
+    invitedBy: invitedByUserId,
+    invitationToken,
+    invitationExpiresAt,
+    invitationStatus: ["招待中"],
+  };
+  const newUsers = [...users];
+  newUsers[index] = updatedUser;
+  await updateCustomer(customerId, { users: newUsers });
+  return updatedUser;
 }
 
 /**
@@ -519,7 +566,10 @@ module.exports = {
   findCustomerAndUserByResetToken,
   setPasswordResetToken,
   resetPassword,
+  roleOf,
+  invitationStatusOf,
   addInvitedUser,
+  reissueInvitation,
   acceptInvitation,
   addReferral,
   findCustomerAndReferralByToken,

@@ -33,12 +33,17 @@ function buildAcceptUrl(token) {
   return `${base}/accept-invitation.html?token=${encodeURIComponent(token)}`;
 }
 
-function currentUserRole(user) {
-  return Array.isArray(user.role) ? user.role[0] : user.role;
-}
+const { roleOf: currentUserRole, invitationStatusOf } = customerStore;
 
-function invitationStatusOf(user) {
-  return Array.isArray(user.invitationStatus) ? user.invitationStatus[0] : user.invitationStatus;
+// role="編集者"の招待にはapproverIds（承認者）が最低1人必須。候補は既存のactive
+// （招待承諾済み）な管理者・承認者のみに限定する（辞めたメンバーや別の編集者を
+// 承認者に指定できてしまうのを防ぐ）。
+function validApproverCandidateIds(customer) {
+  return new Set(
+    (customer.users || [])
+      .filter((u) => invitationStatusOf(u) === "承諾済み" && ["管理者", "承認者"].includes(currentUserRole(u)))
+      .map((u) => u.userId)
+  );
 }
 
 router.post("/api/team/invite", requireAuth, requireVerified, express.json(), async (req, res) => {
@@ -46,31 +51,54 @@ router.post("/api/team/invite", requireAuth, requireVerified, express.json(), as
     return res.status(403).json({ error: "forbidden" });
   }
 
-  const { email, role } = req.body || {};
+  const { email, name, role, approverIds } = req.body || {};
   if (!isValidEmail(email)) {
     return res.status(400).json({ error: "invalid_email" });
   }
+  if (typeof name !== "string" || !name.trim()) {
+    return res.status(400).json({ error: "invalid_name" });
+  }
   if (!VALID_ROLES.includes(role)) {
     return res.status(400).json({ error: "invalid_role" });
+  }
+  let normalizedApproverIds = [];
+  if (role === "編集者") {
+    if (!Array.isArray(approverIds) || approverIds.length === 0) {
+      return res.status(400).json({ error: "approver_required" });
+    }
+    const candidates = validApproverCandidateIds(req.customer);
+    if (!approverIds.every((id) => candidates.has(id))) {
+      return res.status(400).json({ error: "invalid_approver" });
+    }
+    normalizedApproverIds = approverIds;
   }
 
   try {
     const target = email.trim().toLowerCase();
     const existing = (req.customer.users || []).find((u) => (u.email || "").toLowerCase() === target);
-    if (existing) {
-      return res.status(409).json({ error: "already_invited" });
+    if (existing && invitationStatusOf(existing) === "承諾済み") {
+      return res.status(409).json({ error: "already_member" });
     }
 
     const invitationToken = crypto.randomBytes(32).toString("hex");
     const invitationExpiresAt = new Date(Date.now() + INVITATION_TTL_MS).toISOString();
-
-    await customerStore.addInvitedUser(req.customer.id, {
+    const invitePayload = {
       email,
+      name: name.trim(),
       role,
+      approverIds: normalizedApproverIds,
       invitedByUserId: req.user.userId,
       invitationToken,
       invitationExpiresAt,
-    });
+    };
+
+    // 既存のpending中招待（同一メールアドレス）は配列に追加せず、同じ要素を
+    // 新しいトークン・役割・承認者で上書きする（実質的な再招待）。
+    if (existing) {
+      await customerStore.reissueInvitation(req.customer.id, email, invitePayload);
+    } else {
+      await customerStore.addInvitedUser(req.customer.id, invitePayload);
+    }
 
     const mailResult = await sendCustomerMail({
       toEmail: email.trim(),
@@ -86,6 +114,19 @@ router.post("/api/team/invite", requireAuth, requireVerified, express.json(), as
     console.error("[team/invite] failed:", err);
     res.status(500).json({ error: "internal_error" });
   }
+});
+
+// メンバー一覧（team.htmlの表示・招待モーダルの承認者候補取得の両方に使う）。
+// role問わず閲覧可能（承認者選択のためには編集者自身も一覧を見られる必要がある）。
+router.get("/api/team/members", requireAuth, async (req, res) => {
+  const members = (req.customer.users || []).map((u) => ({
+    userId: u.userId || null,
+    name: u.name || "",
+    email: u.email || "",
+    role: currentUserRole(u),
+    status: invitationStatusOf(u),
+  }));
+  res.json({ members });
 });
 
 router.get("/api/team/invite-info", async (req, res) => {

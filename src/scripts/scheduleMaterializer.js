@@ -72,7 +72,9 @@ async function main() {
         continue;
       }
 
-      const texts = await scheduleTextStore.listScheduleTexts(schedule.id);
+      // 承認待ち・却下・失効中のバッチ（編集者作成分）は自動生成プールから除外する
+      // （scheduleTextStore.listApprovedScheduleTexts参照）。
+      const texts = await scheduleTextStore.listApprovedScheduleTexts(schedule.id);
       const n = effectiveDailyCount(schedule, texts.length);
       if (n === 0) {
         // 投稿文章が未登録、または枠が未設定。生成する予約がないだけで、

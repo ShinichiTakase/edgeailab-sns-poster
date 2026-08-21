@@ -32,7 +32,11 @@ const ERROR_HTML = `<!doctype html>
 const AUTHORIZE_URL = "https://x.com/i/oauth2/authorize";
 const TOKEN_URL = "https://api.x.com/2/oauth2/token";
 const USERS_ME_URL = "https://api.x.com/2/users/me";
-const SCOPE = "tweet.read tweet.write users.read offline.access";
+// media.write：Xのリンクカードが小さいアイコンにしかならない問題（og:imageのフォールバックを
+// Xが確実に行わないため）を避けて記事画像を直接添付するために必要（xPoster.js uploadImage参照）。
+// 2026-08-21追加。追加前に連携済みのアカウントはこのスコープを持たないため、画像添付を
+// 使うには再連携（このOAuthフローのやり直し）が必要（refresh tokenだけでは新スコープは付与されない）。
+const SCOPE = "tweet.read tweet.write users.read offline.access media.write";
 
 router.get("/oauth/x/authorize", requireAuth, blockExpiredTrial, requireSnsConnectionAvailable("x"), (req, res) => {
   const slug = req.customer.id;

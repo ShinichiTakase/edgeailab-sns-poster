@@ -69,6 +69,37 @@ const REFERRAL_INVITATION_EMAIL = {
     ].join("\n"),
 };
 
+const APPROVAL_REQUEST_EMAIL = {
+  subject: "【EdgeAI Lab】投稿の承認依頼が届いています",
+  body: (requesterName, summary, approvalUrl) =>
+    [
+      `${requesterName || "編集者"}様から投稿の承認依頼が届いています。`,
+      "",
+      summary,
+      "",
+      "以下のリンクから内容を確認し、承認または却下してください。",
+      approvalUrl,
+      "",
+      "このリンクの有効期限は72時間です。",
+      "期限が切れた場合は、ログイン後メニューの「承認待ち一覧」からご確認いただけます。",
+    ].join("\n"),
+};
+
+const APPROVAL_DECIDED_EMAIL = {
+  subject: (decision) => `【EdgeAI Lab】投稿の承認依頼が${decision === "rejected" ? "却下" : "失効"}されました`,
+  body: (decision, summary, comment) =>
+    [
+      decision === "rejected" ? "承認依頼が却下されました。" : "承認依頼が72時間以内に承認されず、失効しました。",
+      "",
+      summary,
+      comment ? `\nコメント: ${comment}` : "",
+      "",
+      "内容を編集の上、再度承認依頼を送信してください。",
+    ]
+      .filter(Boolean)
+      .join("\n"),
+};
+
 const PASSWORD_RESET_EMAIL = {
   subject: "【EdgeAI Lab】パスワード再設定のご案内",
   body: (resetUrl) =>
@@ -88,6 +119,8 @@ module.exports = {
   TRIAL_ENDING_EMAIL,
   INVITATION_EMAIL,
   REFERRAL_INVITATION_EMAIL,
+  APPROVAL_REQUEST_EMAIL,
+  APPROVAL_DECIDED_EMAIL,
   PASSWORD_RESET_EMAIL,
   planLabel,
 };

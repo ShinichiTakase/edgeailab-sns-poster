@@ -22,7 +22,7 @@ function currentBillingPeriod() {
  * @param {string} createdBy 投稿を実行したユーザーid（req.user.userId）
  * @param {string} platform "x" | "threads" | "facebook" | "instagram"
  */
-async function createPostingLog({ customerCode, createdBy, platform, content, platformPostId, containsUrl, meterEventSent }) {
+async function createPostingLog({ customerCode, createdBy, platform, content, platformPostId, containsUrl, meterEventSent, accountName }) {
   const res = await microcmsFetch(`/posting_logs`, {
     method: "POST",
     body: JSON.stringify({
@@ -35,6 +35,10 @@ async function createPostingLog({ customerCode, createdBy, platform, content, pl
       billing_period: currentBillingPeriod(),
       meter_event_sent: Boolean(meterEventSent),
       contains_url: Boolean(containsUrl),
+      // 投稿時点で実際にトークンが紐づいていたSNSアカウント名（例: Instagramのusername）。
+      // 「連携し直したら別アカウントに投稿されていた」事故（2026-08-21）の再発時に、
+      // どのアカウントに投稿されたかを事後追跡できるようにするため。
+      account_name: accountName || "",
     }),
   });
   if (!res.ok) {

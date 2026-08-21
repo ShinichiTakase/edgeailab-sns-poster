@@ -4,22 +4,19 @@
 // 判定ロジックを一致させること）。
 const express = require("express");
 const { requireAuth } = require("../middleware/requireAuth");
-const { getConnectedEntry, deletePlatformTokensBySlug } = require("../lib/tokenStore");
+const { getConnectedEntry, deletePlatformTokensBySlug, accountNameFor } = require("../lib/tokenStore");
 const { planKey } = require("../lib/stripePricing");
 const { getMaxConnections } = require("../lib/planLimitsConfig");
 const { isPlatformAvailable } = require("../lib/snsConnectionModeConfig");
+const { createLogger } = require("../lib/logger");
 
 const router = express.Router();
+// 「削除」操作の監査ログ。instagram.js/facebook.js等のOAuthコールバックはinstagram.log等に
+// 連携完了を記録しているが、連携解除（このファイル）側には記録が一切なかったため、
+// 「本当に削除ボタンを押したのか」を事後に確認できるよう追加した。
+const { logInfo } = createLogger("sns-connections.log");
 
 const PLATFORMS = ["facebook", "instagram", "threads", "x"];
-
-// facebookは複数ページを保持しうるため連結表示、他はusername（なければuser_id）を表示。
-function accountNameFor(platform, tokenEntry) {
-  if (platform === "facebook") {
-    return (tokenEntry.pages || []).map((p) => p.pageName).join(", ") || null;
-  }
-  return tokenEntry.username || tokenEntry.user_id || null;
-}
 
 router.get("/api/sns-connections", requireAuth, (req, res) => {
   const customerId = req.customer.id;
@@ -53,10 +50,14 @@ router.post("/api/sns-connections/:platform/disconnect", requireAuth, (req, res)
     return res.status(400).json({ error: "invalid_platform" });
   }
 
-  const removed = deletePlatformTokensBySlug(req.customer.id, platform);
+  const slug = req.customer.id;
+  const beforeEntry = getConnectedEntry(slug)[platform];
+  const removed = deletePlatformTokensBySlug(slug, platform);
   if (!removed) {
     return res.status(404).json({ error: "not_connected" });
   }
+  const accountName = beforeEntry ? accountNameFor(platform, beforeEntry) : null;
+  logInfo(`[sns-connections/disconnect] slug=${slug} platform=${platform} account=${accountName || "unknown"} by=${req.user.userId}`);
   res.json({ ok: true });
 });
 

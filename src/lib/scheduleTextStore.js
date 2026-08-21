@@ -23,6 +23,34 @@ async function listScheduleTexts(scheduleId) {
   return all;
 }
 
+// scheduleMaterializer.jsのラウンドロビン抽選プール用。承認待ち・却下・失効中のバッチだけを
+// 除外する（included側をnone/approvedのORで絞ると、承認機能導入前からある既存の投稿文章
+// （approval_status未設定＝空配列）が[contains]に一致せず全滅する。実機検証済み、2026-08-21）。
+async function listApprovedScheduleTexts(scheduleId) {
+  const all = [];
+  const limit = 100;
+  let offset = 0;
+  const filters = [
+    `schedule_id[equals]${encodeURIComponent(scheduleId)}`,
+    "approval_status[not_contains]pending",
+    "approval_status[not_contains]rejected",
+    "approval_status[not_contains]expired",
+  ].join("[and]");
+  for (;;) {
+    const res = await microcmsFetch(`/schedule_texts?filters=${filters}&orders=createdAt&limit=${limit}&offset=${offset}`);
+    if (!res.ok) {
+      const text = await res.text().catch(() => "");
+      throw new Error(`[scheduleTextStore] listApprovedScheduleTexts failed ${res.status} ${text.slice(0, 300)}`);
+    }
+    const json = await res.json();
+    const contents = Array.isArray(json.contents) ? json.contents : [];
+    all.push(...contents);
+    if (contents.length < limit) break;
+    offset += limit;
+  }
+  return all;
+}
+
 async function getScheduleTextById(id) {
   const res = await microcmsFetch(`/schedule_texts/${encodeURIComponent(id)}`);
   if (res.status === 404) return null;
@@ -42,6 +70,8 @@ async function createScheduleText({
   instagramImageUrl,
   instagramVideoUrl,
   sourceExcerpt,
+  createdBy,
+  approvalFields,
 }) {
   const res = await microcmsFetch(`/schedule_texts`, {
     method: "POST",
@@ -54,6 +84,10 @@ async function createScheduleText({
       instagram_image_url: instagramImageUrl || "",
       instagram_video_url: instagramVideoUrl || "",
       source_excerpt: sourceExcerpt || "",
+      created_by: createdBy || "",
+      // 承認ステータス関連フィールド（approvalStore.jsのbuildApprovalFields/noneApprovalFields）。
+      // 未指定時（既存呼び出し元との後方互換）はnoneApprovalFields相当を明示的に渡すこと。
+      ...(approvalFields || {}),
     }),
   });
   if (!res.ok) {
@@ -85,6 +119,7 @@ async function deleteScheduleText(id) {
 
 module.exports = {
   listScheduleTexts,
+  listApprovedScheduleTexts,
   getScheduleTextById,
   createScheduleText,
   updateScheduleText,

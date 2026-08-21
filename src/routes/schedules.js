@@ -8,6 +8,8 @@ const scheduleTextStore = require("../lib/scheduleTextStore");
 const { listPendingBySourceSchedule, deleteScheduledPost } = require("../lib/scheduledPostStore");
 const { isSlotWideEnough, dateOnly } = require("../lib/scheduleFiring");
 const { getDocsNumber } = require("../lib/generationConfig");
+const { roleOf } = require("../lib/customerStore");
+const approvalStore = require("../lib/approvalStore");
 
 const router = express.Router();
 
@@ -318,6 +320,20 @@ router.post(
           return res.status(400).json({ error: validationError });
         }
       }
+
+      // 編集者は必ず承認依頼を経由する（[保存]の代わりに[承認依頼]。承認者は招待時に
+      // 紐付けたapproverIds、role="編集者"以外は不要）。承認完了までscheduleMaterializer.js
+      // の自動生成プールから除外される（scheduleTextStore.listApprovedScheduleTexts参照）。
+      const isEditor = roleOf(req.user) === "編集者";
+      let approverIds = [];
+      if (isEditor) {
+        approverIds = JSON.parse(req.user.approverIds || "[]");
+        if (approverIds.length === 0) {
+          return res.status(400).json({ error: "no_approver_configured" });
+        }
+      }
+      const approvalFields = isEditor ? approvalStore.buildApprovalFields(approverIds) : approvalStore.noneApprovalFields();
+
       // microCMSへの書き込みは並行数が多いと429（Too many requests）で弾かれるため
       // （10件同時のPromise.allで実際に発生していた）、1件ずつ順番に作成する。
       // 途中で失敗した場合は、それまでに作成済みの分をロールバック（削除）してから
@@ -334,6 +350,8 @@ router.post(
             instagramImageUrl: entry.instagramImageUrl,
             instagramVideoUrl: entry.instagramVideoUrl,
             sourceExcerpt,
+            createdBy: req.user.userId,
+            approvalFields,
           });
           created.push(record);
         }
@@ -343,7 +361,19 @@ router.post(
         }
         throw err;
       }
-      res.json({ ids: created.map((c) => c.id) });
+
+      if (isEditor) {
+        const approvals = JSON.parse(approvalFields.approvals_json);
+        const summary = `スケジュール「${schedule.name}」の投稿文章バッチ（${created.length}件、生成元: ${sourceExcerpt || "不明"}）`;
+        await approvalStore.sendApprovalRequestEmails({
+          customer: req.customer,
+          requesterUser: req.user,
+          approvals,
+          summary,
+        });
+      }
+
+      res.json({ ids: created.map((c) => c.id), approvalRequested: isEditor });
     } catch (err) {
       console.error(`[schedules] bulk create text failed id=${req.params.id}:`, err);
       res.status(500).json({ error: "internal_error" });
@@ -360,6 +390,9 @@ router.post("/api/schedules/:id/texts", requireAuth, requireVerified, blockExpir
       return res.status(400).json({ error: validationError });
     }
     const body = req.body;
+    // このエンドポイントは承認ゲート対象外（単発の追加・再生成用）。承認状態フィールドを
+    // 明示的にnoneにしておかないと自動生成プールの絞り込み（approval_status[contains]...）
+    // に引っかからず、永久にプール対象外になってしまうため必ず書き込む。
     const created = await scheduleTextStore.createScheduleText({
       scheduleId: schedule.id,
       xText: body.xText,
@@ -368,6 +401,8 @@ router.post("/api/schedules/:id/texts", requireAuth, requireVerified, blockExpir
       instagramText: body.instagramText,
       instagramImageUrl: body.instagramImageUrl,
       sourceExcerpt: typeof body.sourceExcerpt === "string" ? body.sourceExcerpt.slice(0, 200) : "",
+      createdBy: req.user.userId,
+      approvalFields: approvalStore.noneApprovalFields(),
     });
     res.json({ id: created.id });
   } catch (err) {

@@ -6,7 +6,7 @@ const {
   requireUnderTrialPostLimit,
   blockCanceledCustomer,
 } = require("../middleware/requireAuth");
-const { loadStore } = require("../lib/tokenStore");
+const { loadStore, accountNameFor } = require("../lib/tokenStore");
 const { reportMeterEvent } = require("../lib/meterEvents");
 const {
   createPostingLog,
@@ -18,9 +18,12 @@ const {
   createScheduledPost,
   listAllScheduledPostsForCustomer,
 } = require("../lib/scheduledPostStore");
+const retryStore = require("../lib/scheduledPostRetryStore");
+const postingLogOriginStore = require("../lib/postingLogOriginStore");
+const approvalStore = require("../lib/approvalStore");
 const { parseMonthParam, isPastMonth } = require("../lib/monthParam");
-const { bumpTrialPostCount } = require("../lib/customerStore");
-const { containsUrl } = require("../lib/urlDetection");
+const { bumpTrialPostCount, roleOf } = require("../lib/customerStore");
+const { containsUrl, extractFirstUrl } = require("../lib/urlDetection");
 const xPoster = require("../lib/xPoster");
 const facebookPoster = require("../lib/facebookPoster");
 const instagramPoster = require("../lib/instagramPoster");
@@ -35,7 +38,9 @@ const PLATFORMS = ["x", "threads", "facebook", "instagram"];
 // og:imageリンクプレビューが表示されなくなるため、Instagram以外には渡さない。
 async function postToPlatform(platform, entry, text, imageUrl, facebookPageId) {
   if (platform === "x") {
-    return xPoster.postText(entry.access_token, text);
+    return xPoster.postTextWithLinkImage(entry.access_token, text, extractFirstUrl(text), (err) => {
+      console.error(`[posts] x link image attach failed:`, err);
+    });
   }
   if (platform === "threads") {
     return threadsPoster.postText({ userId: entry.user_id, accessToken: entry.access_token }, text);
@@ -44,7 +49,7 @@ async function postToPlatform(platform, entry, text, imageUrl, facebookPageId) {
     const pages = entry.pages || [];
     const page = facebookPageId ? pages.find((p) => p.pageId === facebookPageId) : pages[0];
     if (!page) throw new Error("facebook_page_not_found");
-    return facebookPoster.postText({ pageId: page.pageId, pageAccessToken: page.pageAccessToken }, text);
+    return facebookPoster.postText({ pageId: page.pageId, pageAccessToken: page.pageAccessToken }, text, extractFirstUrl(text));
   }
   if (platform === "instagram") {
     return instagramPoster.postImage({ igUserId: entry.user_id, accessToken: entry.access_token }, text, imageUrl);
@@ -66,6 +71,72 @@ function validatePlatformsAndTexts(platforms, texts) {
     }
   }
   return null;
+}
+
+// 編集者の即時投稿・予約投稿を、実投稿の代わりにscheduled_postsへ承認待ちで作成する
+// （即時投稿・予約投稿の両ルートから共有。プラットフォームごとに1レコード、
+// 同一batch_idでひとつの承認対象単位とする。approvalStore.js参照）。
+async function requestApprovalForOneShot(req, res, { platforms, texts, imageUrl, facebookPageId, store, scheduledAt }) {
+  const approverIds = JSON.parse(req.user.approverIds || "[]");
+  if (approverIds.length === 0) {
+    return res.status(400).json({ error: "no_approver_configured" });
+  }
+
+  const customerId = req.customer.id;
+  const results = {};
+  const validPlatforms = [];
+  for (const platform of platforms) {
+    if (!store[platform]) {
+      results[platform] = { ok: false, error: "not_connected" };
+      continue;
+    }
+    if (platform === "facebook") {
+      const pages = store.facebook.pages || [];
+      const page = facebookPageId ? pages.find((p) => p.pageId === facebookPageId) : pages[0];
+      if (!page) {
+        results[platform] = { ok: false, error: "facebook_page_not_found" };
+        continue;
+      }
+    }
+    validPlatforms.push(platform);
+  }
+  if (validPlatforms.length === 0) {
+    return res.json({ approvalRequested: false, results });
+  }
+
+  const approvalFields = approvalStore.buildApprovalFields(approverIds);
+  for (const platform of validPlatforms) {
+    const text = texts[platform];
+    try {
+      const created = await createScheduledPost({
+        customerCode: customerId,
+        createdBy: req.user.userId,
+        platform,
+        content: text,
+        scheduledAt,
+        containsUrl: containsUrl(text),
+        imageUrl: platform === "instagram" ? imageUrl : undefined,
+        facebookPageId: platform === "facebook" ? facebookPageId : undefined,
+        approvalFields,
+      });
+      results[platform] = { ok: true, scheduledPostId: created.id, pendingApproval: true };
+    } catch (err) {
+      console.error(`[posts] approval request create failed platform=${platform} customerId=${customerId}:`, err);
+      results[platform] = { ok: false, error: "schedule_failed" };
+    }
+  }
+
+  const approvals = JSON.parse(approvalFields.approvals_json);
+  const platformLabel = validPlatforms.join("/");
+  const summary = `ワンショット投稿（${platformLabel}）: ${texts[validPlatforms[0]].slice(0, 60)}`;
+  await approvalStore.sendApprovalRequestEmails({
+    customer: req.customer,
+    requesterUser: req.user,
+    approvals,
+    summary,
+  });
+
+  res.json({ approvalRequested: true, results });
 }
 
 router.post(
@@ -90,6 +161,13 @@ router.post(
     const customerId = req.customer.id;
     const store = loadStore()[customerId] || {};
     const stripeCustomerId = req.customer.stripeCustomerId;
+
+    // 編集者は実投稿を行わず、承認依頼を経由する（[投稿する]の代わりに[承認依頼]。
+    // schedule-detail.jsの投稿文章バッチと同じ仕組み。承認完了後はscheduled_atが既に
+    // 過去のためscheduledPostRunner.jsの次回tickで即実行される）。
+    if (roleOf(req.user) === "編集者") {
+      return requestApprovalForOneShot(req, res, { platforms, texts, imageUrl, facebookPageId, store, scheduledAt: new Date().toISOString() });
+    }
 
     const results = {};
     let successCount = 0;
@@ -140,6 +218,7 @@ router.post(
           platformPostId: postResult.id,
           containsUrl: textContainsUrl,
           meterEventSent,
+          accountName: accountNameFor(platform, entry),
         });
       } catch (err) {
         console.error(`[posts] posting log write failed customerId=${customerId} platform=${platform}:`, err);
@@ -190,6 +269,19 @@ router.post(
 
     const customerId = req.customer.id;
     const store = loadStore()[customerId] || {};
+
+    // 編集者は承認依頼を経由する（即時投稿と同様。選択した予約時刻はそのまま保持し、
+    // 承認完了時刻とどちらか遅い方で実行される＝scheduledPostRunner.jsの通常ロジックに従う）。
+    if (roleOf(req.user) === "編集者") {
+      return requestApprovalForOneShot(req, res, {
+        platforms,
+        texts,
+        imageUrl,
+        facebookPageId,
+        store,
+        scheduledAt: scheduledDate.toISOString(),
+      });
+    }
 
     const results = {};
     let successCount = 0;
@@ -272,22 +364,42 @@ router.get("/api/posts/list", requireAuth, async (req, res) => {
         postDateTime: log.createdAt,
         email: emailByUserId.get(log.created_by) || null,
         platform: platformDisplayLabel(log.platform),
+        accountName: log.account_name || null,
         content: log.content || "",
         scheduledAt: null,
+        // 予約投稿が実行された結果のposting_logs（postingLogOriginStore.js）は、この列で
+        // 「即時」と表示すべきではない（予定日時列に「即時」と表示するのは真の即時投稿のみ。
+        // post-list.html参照）。
+        isImmediate: !postingLogOriginStore.isFromScheduledPost(log.id),
         completedAt: log.posted_at || log.createdAt,
+        // posting_logsは投稿成功時にしか作られないため常に成功扱い。
+        result: "success",
       });
     }
 
     for (const post of scheduledPosts) {
       const status = Array.isArray(post.status) ? post.status[0] : post.status;
+      // status=doneのものは、実行時に作られたposting_logs側（上のループ）に既に同じ投稿が
+      // 記録されているため、ここで重複して行を作らない（重複表示防止）。
+      if (status === "done") continue;
+      // failedは再試行の余地（scheduledPostRetryStore.js）が残っているかどうかで
+      // 「再試行」/「失敗」を出し分ける。
+      const result = status === "failed" ? retryStore.getDisplayState(post.id) : "pending";
       rows.push({
+        // 投稿日時＝この予約（一括生成分含む）が作成された日時。実際に投稿された日時は
+        // 投稿完了時間（completedAt）が担う。2列を混同しないよう役割を分離している。
         postDateTime: post.createdAt,
         email: emailByUserId.get(post.created_by) || null,
         platform: platformDisplayLabel(post.platform),
+        // 実際に投稿が完了していないため、投稿先アカウントはまだ確定しない
+        // （posting_logs側の行のみaccountNameを持つ）。
+        accountName: null,
         content: post.content || "",
-        scheduledAt: post.scheduled_at,
-        // pending以外（今後実行エンジンが対応した場合のposted/failed等）はupdatedAtを完了時刻とみなす。
+        // 予約日時は実行前の目安表示のためのもの。投稿完了後は役目を終えるためブランクにする。
+        scheduledAt: status === "pending" ? post.scheduled_at : null,
+        isImmediate: false,
         completedAt: status === "pending" ? null : post.updatedAt,
+        result,
       });
     }
 

@@ -8,62 +8,17 @@
 //   - scheduled_at が SCOPE_CUTOFF_AT より後（このエンジン導入前に作られた予約は、
 //     実際に実行される前提なしに作られたものが混在しうるため対象外とする）
 //   - created_by が "test"（手動テスト投稿）ではない
-// 成功: status="done"に更新し、即時投稿と同じくposting_logsへ記録・Stripeメーターイベント
-//       送信も行う（実行エンジンが存在しなかったため今まで免れていたが、実際に投稿される
-//       以上は即時投稿と同じ課金対象にするのが一貫している）。完了時刻はmicroCMSの
-//       updatedAt（status更新時刻）をそのまま使う。posted_atのような専用フィールドは
-//       スキーマに存在しないため追加していない。
-// 失敗: status="failed"に更新するのみ（課金なし）。
+// 投稿の実際の実行（成功時のstatus="done"更新・posting_logs記録・メーター送信）は
+// scheduledPostExecutor.jsに共通化されている（再試行エンジンscheduledPostRetryRunner.jsと共有）。
+// 失敗: status="failed"に更新し、3分後を次回再試行時刻としてscheduledPostRetryStore.jsに記録する
+//       （実際の再試行はscheduledPostRetryRunner.jsが担う。最大3回、3分間隔）。
 const path = require("path");
 require("dotenv").config({ path: path.join(__dirname, "..", "..", ".env") });
 
-const { listDuePendingScheduledPosts, markScheduledPostStatus, PLATFORM_LABELS } = require("../lib/scheduledPostStore");
-const { createPostingLog } = require("../lib/postingLogStore");
-const { loadStore } = require("../lib/tokenStore");
-const { getCustomerById, isTrialPostLimitReached, isCanceled } = require("../lib/customerStore");
-const { reportMeterEvent } = require("../lib/meterEvents");
-const { containsUrl } = require("../lib/urlDetection");
-const xPoster = require("../lib/xPoster");
-const facebookPoster = require("../lib/facebookPoster");
-const instagramPoster = require("../lib/instagramPoster");
-const threadsPoster = require("../lib/threadsPoster");
+const { listDuePendingScheduledPosts, markScheduledPostStatus, SCOPE_CUTOFF_AT } = require("../lib/scheduledPostStore");
+const { attemptScheduledPost } = require("../lib/scheduledPostExecutor");
+const retryStore = require("../lib/scheduledPostRetryStore");
 const { logInfo, logWarn, logError } = require("../lib/logger").createLogger("scheduled-post-runner.log");
-
-// このエンジンをデプロイした時刻（固定値）。過去にこの時刻より前のscheduled_atを持つ
-// pending予約は、今後もこのエンジンの対象にはしない（変更しないこと。書き換えると
-// 積み残っていた過去予約が一斉に実行されてしまう）。
-const SCOPE_CUTOFF_AT = "2026-08-17T22:44:38.000Z";
-
-// posts.jsのpostToPlatformと同じ方針：imageUrl/videoUrlはInstagramにのみ渡す
-// （Facebook/Threadsに渡すと写真投稿扱いになりog:imageリンクプレビューが出なくなるため）。
-// Instagramはvideo_urlがあればリール投稿、なければ従来通り画像投稿にフォールバックする。
-async function postToPlatform(platform, entry, text, imageUrl, videoUrl, facebookPageId) {
-  if (platform === "x") {
-    return xPoster.postText(entry.access_token, text);
-  }
-  if (platform === "threads") {
-    return threadsPoster.postText({ userId: entry.user_id, accessToken: entry.access_token }, text);
-  }
-  if (platform === "facebook") {
-    const pages = entry.pages || [];
-    // facebookPageIdが指定されていればそのページへ、未指定（旧データ・単一ページ運用等）
-    // なら先頭ページへフォールバックする。
-    const page = facebookPageId ? pages.find((p) => p.pageId === facebookPageId) : pages[0];
-    if (!page) throw new Error("facebook_page_not_found");
-    return facebookPoster.postText({ pageId: page.pageId, pageAccessToken: page.pageAccessToken }, text);
-  }
-  if (platform === "instagram") {
-    const igEntry = { igUserId: entry.user_id, accessToken: entry.access_token };
-    if (videoUrl) return instagramPoster.postReel(igEntry, text, videoUrl);
-    return instagramPoster.postImage(igEntry, text, imageUrl);
-  }
-  throw new Error(`unknown_platform:${platform}`);
-}
-
-function platformKeyFromLabel(value) {
-  const label = Array.isArray(value) ? value[0] : value;
-  return Object.keys(PLATFORM_LABELS).find((k) => PLATFORM_LABELS[k] === label) || null;
-}
 
 async function main() {
   const duePosts = await listDuePendingScheduledPosts(SCOPE_CUTOFF_AT);
@@ -74,78 +29,21 @@ async function main() {
   logInfo(`[scheduled-post-runner] ${duePosts.length} due post(s) found`);
 
   const customerCache = new Map();
-  async function getCustomerCached(customerCode) {
-    if (!customerCache.has(customerCode)) {
-      customerCache.set(customerCode, await getCustomerById(customerCode));
-    }
-    return customerCache.get(customerCode);
-  }
-
   let succeeded = 0;
   let failed = 0;
 
   for (const post of duePosts) {
-    const platform = platformKeyFromLabel(post.platform);
-    const customerCode = post.customer_code;
-
+    const platform = Array.isArray(post.platform) ? post.platform[0] : post.platform;
     try {
-      if (!platform) throw new Error(`invalid_platform_value:${JSON.stringify(post.platform)}`);
-
-      const customer = await getCustomerCached(customerCode);
-      if (!customer) throw new Error("customer_not_found");
-
-      // ワンショット投稿（posts.js）と同じガード。cronはHTTPリクエストの文脈を持たないため、
-      // requireAuth.jsのミドルウェアではなくcustomerStore.jsの純粋関数を直接呼ぶ。
-      if (isCanceled(customer)) throw new Error("account_canceled");
-      if (isTrialPostLimitReached(customer)) throw new Error("trial_post_limit_reached");
-
-      const tokenEntry = (loadStore()[customerCode] || {})[platform];
-      if (!tokenEntry) throw new Error("not_connected");
-
-      const postResult = await postToPlatform(
-        platform,
-        tokenEntry,
-        post.content || "",
-        post.image_url,
-        post.video_url,
-        post.facebook_page_id || null
-      );
-
-      await markScheduledPostStatus(post.id, "done");
-
-      const textContainsUrl = Boolean(post.contains_url) || containsUrl(post.content);
-      let meterEventSent = false;
-      try {
-        await reportMeterEvent("post_created", customer.stripeCustomerId);
-        if (platform === "x" && textContainsUrl) {
-          await reportMeterEvent("x_surcharge_post", customer.stripeCustomerId);
-        }
-        meterEventSent = true;
-      } catch (meterErr) {
-        logError(`[scheduled-post-runner] meter event failed id=${post.id}:`, meterErr);
-      }
-
-      try {
-        await createPostingLog({
-          customerCode,
-          createdBy: post.created_by,
-          platform,
-          content: post.content,
-          platformPostId: postResult.id,
-          containsUrl: textContainsUrl,
-          meterEventSent,
-        });
-      } catch (logErr) {
-        logError(`[scheduled-post-runner] posting log write failed id=${post.id}:`, logErr);
-      }
-
+      const result = await attemptScheduledPost(post, customerCache, { logError });
       succeeded += 1;
-      logInfo(`[scheduled-post-runner] posted id=${post.id} platform=${platform} customerCode=${customerCode}`);
+      logInfo(`[scheduled-post-runner] posted id=${post.id} platform=${result.platform} customerCode=${result.customerCode}`);
     } catch (err) {
       failed += 1;
-      logError(`[scheduled-post-runner] failed id=${post.id} platform=${platform} customerCode=${customerCode}:`, err);
+      logError(`[scheduled-post-runner] failed id=${post.id} platform=${platform} customerCode=${post.customer_code}:`, err);
       try {
         await markScheduledPostStatus(post.id, "failed");
+        retryStore.recordInitialFailure(post.id);
       } catch (markErr) {
         logError(`[scheduled-post-runner] failed to mark status=failed id=${post.id}:`, markErr);
       }

@@ -1,13 +1,18 @@
 // microCMS の scheduled_posts スキーマ（予約投稿）へのアクセス。
-// 予約の作成（ワンショット投稿ウィザードの「予約」）と、予定件数・請求予測表示用の
-// 集計読み取りの両方をここで扱う。実際に予約を投稿として実行するcronはまだ存在しない。
-// postingLogStore.jsと同様、selectフィールドは配列で書き込み・読み取りする
+// 予約の作成（ワンショット投稿ウィザードの「予約」）、予定件数・請求予測表示用の集計読み取り、
+// および実際の投稿実行（scheduledPostRunner.js）・再試行（scheduledPostRetryRunner.js）が
+// 参照する検索系を担う。postingLogStore.jsと同様、selectフィールドは配列で書き込み・読み取りする
 // （Array.isArrayで防御的に読む）。
 const { microcmsFetch } = require("./microcms");
 
 // microCMSのselectフィールド側の有効値は小文字のキーそのもの（"X"等の大文字表示ラベルは
 // 無効値としてエラーなく空配列に落とされるため注意。実測で確認済み）。
 const PLATFORM_LABELS = { x: "x", threads: "threads", facebook: "facebook", instagram: "instagram" };
+
+// 予約投稿の実行エンジン（scheduledPostRunner.js）をデプロイした時刻（固定値）。過去にこの
+// 時刻より前のscheduled_atを持つpending/failed予約は、今後もこのエンジン・再試行エンジンの
+// 対象にはしない（変更しないこと。書き換えると積み残っていた過去予約が一斉に実行されてしまう）。
+const SCOPE_CUTOFF_AT = "2026-08-17T22:44:38.000Z";
 
 function monthRange(year, month) {
   const start = new Date(year, month - 1, 1);
@@ -107,6 +112,7 @@ async function createScheduledPost({
   videoUrl,
   sourceScheduleId,
   facebookPageId,
+  approvalFields,
 }) {
   const res = await microcmsFetch(`/scheduled_posts`, {
     method: "POST",
@@ -122,6 +128,8 @@ async function createScheduledPost({
       video_url: videoUrl || "",
       source_schedule_id: sourceScheduleId || "",
       facebook_page_id: facebookPageId || "",
+      // 承認ステータス関連フィールド（approvalStore.jsのbuildApprovalFields/noneApprovalFields）。
+      ...(approvalFields || {}),
     }),
   });
   if (!res.ok) {
@@ -138,9 +146,43 @@ async function createScheduledPost({
 async function listDuePendingScheduledPosts(cutoffIso) {
   const nowIso = new Date().toISOString();
   // statusはセレクトフィールド（配列書き込み）のため[contains]で一致させる（上のlistPendingScheduledPosts参照）。
+  // 承認待ち・却下・失効中（編集者作成分）は除外する。included側をnone/approvedのORで絞ると、
+  // 承認機能導入前からある既存予約（approval_status未設定＝空配列）が[contains]に一致せず
+  // 全滅するため、excluded側をnot_containsで列挙する方式にする（実機検証済み、2026-08-21）。
   const filters = [
     "status[contains]pending",
     `scheduled_at[less_than]${encodeURIComponent(nowIso)}`,
+    `scheduled_at[greater_than]${encodeURIComponent(cutoffIso)}`,
+    "created_by[not_equals]test",
+    "approval_status[not_contains]pending",
+    "approval_status[not_contains]rejected",
+    "approval_status[not_contains]expired",
+  ].join("[and]");
+
+  const all = [];
+  const limit = 100;
+  let offset = 0;
+  for (;;) {
+    const res = await microcmsFetch(`/scheduled_posts?filters=${filters}&limit=${limit}&offset=${offset}`);
+    if (!res.ok) {
+      const text = await res.text().catch(() => "");
+      throw new Error(`[scheduledPostStore] listDuePendingScheduledPosts failed ${res.status} ${text.slice(0, 300)}`);
+    }
+    const json = await res.json();
+    const contents = Array.isArray(json.contents) ? json.contents : [];
+    all.push(...contents);
+    if (contents.length < limit) break;
+    offset += limit;
+  }
+  return all;
+}
+
+// listDuePendingScheduledPostsと同じくSCOPE_CUTOFF_AT・created_by除外を適用する。
+// 再試行対象の絞り込み（上限回数・次回再試行時刻）はscheduledPostRetryStore.js側で行うため、
+// ここではstatus=failedの候補を全件返す。
+async function listFailedScheduledPosts(cutoffIso) {
+  const filters = [
+    "status[contains]failed",
     `scheduled_at[greater_than]${encodeURIComponent(cutoffIso)}`,
     "created_by[not_equals]test",
   ].join("[and]");
@@ -152,7 +194,7 @@ async function listDuePendingScheduledPosts(cutoffIso) {
     const res = await microcmsFetch(`/scheduled_posts?filters=${filters}&limit=${limit}&offset=${offset}`);
     if (!res.ok) {
       const text = await res.text().catch(() => "");
-      throw new Error(`[scheduledPostStore] listDuePendingScheduledPosts failed ${res.status} ${text.slice(0, 300)}`);
+      throw new Error(`[scheduledPostStore] listFailedScheduledPosts failed ${res.status} ${text.slice(0, 300)}`);
     }
     const json = await res.json();
     const contents = Array.isArray(json.contents) ? json.contents : [];
@@ -208,9 +250,11 @@ async function deleteScheduledPost(id) {
 
 module.exports = {
   PLATFORM_LABELS,
+  SCOPE_CUTOFF_AT,
   listPendingScheduledPosts,
   listAllScheduledPostsForCustomer,
   listDuePendingScheduledPosts,
+  listFailedScheduledPosts,
   listPendingBySourceSchedule,
   markScheduledPostStatus,
   deleteScheduledPost,

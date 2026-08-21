@@ -2,7 +2,9 @@ const express = require("express");
 const crypto = require("crypto");
 const fs = require("fs");
 const path = require("path");
-const { savePlatformTokens, deletePlatformTokensByUserId, findDuplicateOwner } = require("../lib/tokenStore");
+const { savePlatformTokens, getConnectedEntry, deletePlatformTokensByUserId, findDuplicateOwner } = require("../lib/tokenStore");
+// state(OAuth) と同じ「短命トークン→データ」の仕組みを、アカウント切替確認の
+// 一時保管にもそのまま流用する（用途はPKCE専用ではなく汎用のTTL付きmapのため）。
 const pkceStore = require("../lib/pkceStore");
 const { requireAuth, blockExpiredTrial } = require("../middleware/requireAuth");
 const { requireSnsConnectionAvailable } = require("../middleware/snsConnectionGuard");
@@ -40,7 +42,20 @@ function logError(...args) {
   writeLogFile("error", args);
 }
 
-const SUCCESS_HTML = `<!doctype html>
+function escapeHtml(text) {
+  return String(text)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+}
+
+// 連携が完了したアカウント名をこの画面上で明示する。削除→再連携のように「上書き」判定に
+// 引っかからない一見普通の新規連携でも、Meta側のアカウント選択で意図しないアカウントを
+// 選んでしまうケースはあり得るため、ここで一度目に見える形にして気づけるようにする。
+function successHtml(username) {
+  const safeUsername = escapeHtml(username || "");
+  return `<!doctype html>
 <html lang="ja"><head><meta charset="utf-8"><title>連携完了</title>
 <style>
   body { display: flex; justify-content: center; margin: 0; padding-top: 15vh; font-family: sans-serif; }
@@ -48,21 +63,22 @@ const SUCCESS_HTML = `<!doctype html>
 </style>
 </head>
 <body><div class="box">
-  <p id="msg">Instagramアカウントの連携が完了しました。連携設定ページに戻ります…</p>
+  <p id="msg">Instagramアカウント「<strong>${safeUsername}</strong>」の連携が完了しました。連携設定ページに戻ります…</p>
   <p><a id="fallback-link" href="/onboarding.html?connected=instagram">戻らない場合はこちら</a></p>
 </div>
 <script>
   (function () {
     var backUrl = "/onboarding.html?connected=instagram";
     if (window.opener && window.opener !== window) {
-      document.getElementById("msg").textContent = "Instagramアカウントの連携が完了しました。このタブを閉じてダッシュボードにお戻りください。";
+      document.getElementById("msg").innerHTML = 'Instagramアカウント「<strong>${safeUsername}</strong>」の連携が完了しました。このタブを閉じてダッシュボードにお戻りください。';
       document.getElementById("fallback-link").style.display = "none";
     } else {
-      setTimeout(function () { location.href = backUrl; }, 1200);
+      setTimeout(function () { location.href = backUrl; }, 1800);
     }
   })();
 </script>
 </body></html>`;
+}
 
 const ERROR_HTML = `<!doctype html>
 <html lang="ja"><head><meta charset="utf-8"><title>エラー</title></head>
@@ -139,21 +155,61 @@ router.get("/oauth/instagram/callback", async (req, res) => {
     }
 
     const now = new Date();
-    savePlatformTokens(slug, "instagram", {
+    const tokenData = {
       user_id: profile.id,
       username: profile.username,
       access_token: longLived.access_token,
       token_expires_at: new Date(now.getTime() + longLived.expires_in * 1000).toISOString(),
       permissions: shortLived.permissions,
       updated_at: now.toISOString(),
-    });
+    };
+
+    // 既にこのslugに別アカウントが連携済みの場合、無言で上書きしない。
+    // 2026-08-21に、連携先が別アカウント（edgeai_lab）へ差し替わった状態のまま予約投稿が
+    // 実行され、意図した顧客アカウント（shin_tks818）に投稿が反映されない事故が発生したため、
+    // 本人が明示的に「切り替える」を選ぶまで保存を保留する。
+    const existing = getConnectedEntry(slug).instagram;
+    if (existing && existing.user_id !== profile.id) {
+      const switchToken = crypto.randomBytes(24).toString("hex");
+      pkceStore.put(switchToken, { slug, tokenData });
+      logWarn(
+        `[instagram/callback] switch pending: slug=${slug} from=${existing.username || existing.user_id} to=${profile.username}`
+      );
+      const qs = new URLSearchParams({
+        instagramSwitch: switchToken,
+        from: existing.username || existing.user_id,
+        to: profile.username,
+      });
+      return res.redirect(`/onboarding.html?${qs.toString()}`);
+    }
+
+    savePlatformTokens(slug, "instagram", tokenData);
 
     logInfo(`[instagram/callback] linked slug=${slug} username=${profile.username}`);
-    return res.send(SUCCESS_HTML);
+    return res.send(successHtml(profile.username));
   } catch (err) {
     logError("[instagram/callback] failed:", err);
     return res.status(500).send(ERROR_HTML);
   }
+});
+
+// 上のswitch-pending分岐で保留したアカウント切替を、本人の明示操作で確定させる。
+// tokenは一度きり使用（pkceStore.take）で、かつ発行時のslugと現在ログイン中の顧客が
+// 一致する場合のみ確定できる（第三者がURLを推測してもトークンを盗み見ない限り確定できない）。
+router.post("/api/instagram/confirm-switch", requireAuth, express.json(), (req, res) => {
+  const { token } = req.body || {};
+  if (!token) return res.status(400).json({ error: "token_required" });
+
+  const pending = pkceStore.take(token);
+  if (!pending || pending.slug !== req.customer.id) {
+    return res.status(400).json({ error: "invalid_or_expired_token" });
+  }
+
+  savePlatformTokens(pending.slug, "instagram", pending.tokenData);
+  logInfo(
+    `[instagram/callback] linked slug=${pending.slug} username=${pending.tokenData.username} (switch confirmed by user)`
+  );
+  res.json({ ok: true, username: pending.tokenData.username });
 });
 
 router.post(
