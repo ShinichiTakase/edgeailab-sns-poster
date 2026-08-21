@@ -37,6 +37,21 @@ const TRIAL_ENDING_EMAIL = {
     ].join("\n"),
 };
 
+const BACKUP_CARD_CHARGED_EMAIL = {
+  subject: "【EdgeAI Lab】お支払い（バックアップカード利用）のお知らせ",
+  body: (invoiceUrl) =>
+    [
+      "登録済みのお支払い方法（プライマリカード）でのお支払いに失敗したため、",
+      "登録済みのバックアップカードでお支払い処理を行い、正常に完了しました。",
+      "",
+      "プライマリカードの有効期限切れ・利用限度額超過等が原因の可能性があります。",
+      "お支払い方法ページから、プライマリカードの登録し直しをご検討ください。",
+      invoiceUrl ? `\n請求内容: ${invoiceUrl}` : "",
+    ]
+      .filter(Boolean)
+      .join("\n"),
+};
+
 const INVITATION_EMAIL = {
   subject: "【EdgeAI Lab】メンバー招待のお知らせ",
   body: (companyName, acceptUrl) =>
@@ -117,6 +132,7 @@ const PASSWORD_RESET_EMAIL = {
 module.exports = {
   VERIFICATION_EMAIL,
   TRIAL_ENDING_EMAIL,
+  BACKUP_CARD_CHARGED_EMAIL,
   INVITATION_EMAIL,
   REFERRAL_INVITATION_EMAIL,
   APPROVAL_REQUEST_EMAIL,

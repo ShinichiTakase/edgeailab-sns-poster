@@ -2,7 +2,7 @@ const express = require("express");
 const customerStore = require("../lib/customerStore");
 const { requireAuth } = require("../middleware/requireAuth");
 const { getXSurcharge } = require("../lib/surchargeConfig");
-const { getStripe } = require("../lib/stripeClient");
+const { getStripe, ensureStripeCustomer } = require("../lib/stripeClient");
 const { planKey, pricesForPlan } = require("../lib/stripePricing");
 const { computeGraduatedAmount } = require("../lib/stripeTierPricing");
 const { getScheduledPostsSummary } = require("../lib/scheduledPostStore");
@@ -10,6 +10,10 @@ const { listSchedulesForCustomer } = require("../lib/scheduleStore");
 const { listScheduleTexts } = require("../lib/scheduleTextStore");
 const { estimateScheduleFirings } = require("../lib/scheduleForecast");
 const { parseMonthParam, isPastMonth } = require("../lib/monthParam");
+const { resolvePriorities, findBackup } = require("../lib/paymentMethodPriority");
+const { BACKUP_CARD_CHARGED_EMAIL } = require("../lib/emailTemplates");
+const { sendCustomerMail } = require("../lib/customerMailer");
+const { notifyFailure } = require("../lib/mailer");
 
 const router = express.Router();
 
@@ -42,12 +46,7 @@ router.post("/api/billing/create-checkout-session", requireAuth, express.json(),
   const base = process.env.APP_BASE_URL || "https://edgeailab.net";
 
   try {
-    let stripeCustomerId = req.customer.stripeCustomerId;
-    if (!stripeCustomerId) {
-      const stripeCustomer = await stripe.customers.create({ email: req.customer.email });
-      stripeCustomerId = stripeCustomer.id;
-      await customerStore.updateCustomer(req.customer.id, { stripeCustomerId });
-    }
+    const stripeCustomerId = await ensureStripeCustomer(stripe, req.customer);
 
     // trialEndsAtをStripeのtrial_endにそのまま設定する。これによりbilling_cycle_anchorが
     // 自動的にtrial_endと同じ日付に設定され（Stripe公式ドキュメント「トライアル期間を使用した
@@ -201,6 +200,275 @@ router.post("/api/billing/change-plan", requireAuth, express.json(), async (req,
   res.json({ ok: true });
 });
 
+// ============================================================
+// お支払い方法（カード）管理
+// カードの実データ（下4桁・有効期限等）はStripeのみを正としmicroCMSにはミラーしない。
+// 一覧表示のたびにStripeへ都度問い合わせる。
+// ============================================================
+
+function requireAdminRole(req, res) {
+  if (customerStore.roleOf(req.user) !== "管理者") {
+    res.status(403).json({ error: "forbidden", message: "お支払い方法の管理はアカウント管理者のみ実行できます。" });
+    return false;
+  }
+  return true;
+}
+
+// Stripe.js（Stripe Elements）が使う公開可能キー。個人情報を含まないため認証不要
+// （x-surchargeと同じ公開設定エンドポイント）。
+router.get("/api/billing/stripe-publishable-key", (req, res) => {
+  const key = process.env.STRIPE_PUBLISHABLE_KEY;
+  if (!key) {
+    return res.status(500).json({ error: "stripe_not_configured" });
+  }
+  res.json({ publishableKey: key });
+});
+
+router.post("/api/billing/payment-methods/setup-intent", requireAuth, async (req, res) => {
+  if (!requireAdminRole(req, res)) return;
+  const stripe = getStripe();
+  if (!stripe) {
+    return res.status(500).json({ error: "stripe_not_configured" });
+  }
+
+  try {
+    const stripeCustomerId = await ensureStripeCustomer(stripe, req.customer);
+    const existing = await stripe.paymentMethods.list({ customer: stripeCustomerId, type: "card" });
+    if (existing.data.length >= 2) {
+      return res.status(409).json({ error: "card_limit_reached", message: "お支払い方法は2枚まで登録できます。" });
+    }
+
+    const setupIntent = await stripe.setupIntents.create({
+      customer: stripeCustomerId,
+      payment_method_types: ["card"],
+    });
+    res.json({ clientSecret: setupIntent.client_secret });
+  } catch (err) {
+    console.error(`[billing/payment-methods/setup-intent] failed customerId=${req.customer.id}:`, err);
+    res.status(500).json({ error: "stripe_error", message: "カード登録の準備に失敗しました。しばらくしてから再度お試しください。" });
+  }
+});
+
+// SetupIntent確定後、フロントから確認された PaymentMethod に優先度（primary/backup）を
+// 付与する。setup-intent発行時点では2枚未満だったが、その後confirmまでの間に別タブで
+// もう1枚登録されてしまうレースに備え、ここでも枚数を再検証する（不整合が起きていれば
+// 今回アタッチされたカードをdetachして取り消す）。
+router.post("/api/billing/payment-methods/confirm", requireAuth, express.json(), async (req, res) => {
+  if (!requireAdminRole(req, res)) return;
+  const stripe = getStripe();
+  if (!stripe) {
+    return res.status(500).json({ error: "stripe_not_configured" });
+  }
+
+  const { paymentMethodId } = req.body || {};
+  if (!paymentMethodId) {
+    return res.status(400).json({ error: "payment_method_id_required" });
+  }
+
+  try {
+    const pm = await stripe.paymentMethods.retrieve(paymentMethodId);
+    if (pm.customer !== req.customer.stripeCustomerId) {
+      return res.status(403).json({ error: "forbidden" });
+    }
+
+    const others = await stripe.paymentMethods.list({ customer: req.customer.stripeCustomerId, type: "card" });
+    const otherCount = others.data.filter((c) => c.id !== paymentMethodId).length;
+    if (otherCount >= 2) {
+      await stripe.paymentMethods.detach(paymentMethodId);
+      return res.status(409).json({ error: "card_limit_reached", message: "お支払い方法は2枚まで登録できます。" });
+    }
+
+    const priority = otherCount === 0 ? "primary" : "backup";
+    await stripe.paymentMethods.update(paymentMethodId, { metadata: { priority } });
+    if (priority === "primary") {
+      await stripe.customers.update(req.customer.stripeCustomerId, {
+        invoice_settings: { default_payment_method: paymentMethodId },
+      });
+    }
+
+    res.json({
+      id: pm.id,
+      brand: pm.card.brand,
+      last4: pm.card.last4,
+      expMonth: pm.card.exp_month,
+      expYear: pm.card.exp_year,
+      priority,
+    });
+  } catch (err) {
+    console.error(`[billing/payment-methods/confirm] failed customerId=${req.customer.id}:`, err);
+    res.status(500).json({ error: "stripe_error", message: "カード登録の確定に失敗しました。しばらくしてから再度お試しください。" });
+  }
+});
+
+router.get("/api/billing/payment-methods", requireAuth, async (req, res) => {
+  if (!requireAdminRole(req, res)) return;
+  if (!req.customer.stripeCustomerId) {
+    return res.json({ cards: [] });
+  }
+
+  const stripe = getStripe();
+  if (!stripe) {
+    return res.status(500).json({ error: "stripe_not_configured" });
+  }
+
+  try {
+    const [list, stripeCustomer] = await Promise.all([
+      stripe.paymentMethods.list({ customer: req.customer.stripeCustomerId, type: "card" }),
+      stripe.customers.retrieve(req.customer.stripeCustomerId),
+    ]);
+    const defaultPaymentMethodId = stripeCustomer.invoice_settings && stripeCustomer.invoice_settings.default_payment_method;
+    const resolved = resolvePriorities(list.data, defaultPaymentMethodId);
+
+    // 既存有償顧客（Checkout経由で1枚だけカードを持ちmetadata未設定）を検知したら、
+    // 以降の呼び出しがフォールバック計算を経ずに済むよう自己修復する。失敗しても
+    // 一覧表示自体は継続する（表示上はresolvePriorities側のフォールバックで賄えるため）。
+    await Promise.all(
+      resolved
+        .filter((r) => r.isLegacyDefault)
+        .map((r) =>
+          stripe.paymentMethods.update(r.paymentMethod.id, { metadata: { priority: "primary" } }).catch((err) => {
+            console.error(`[billing/payment-methods] legacy priority backfill failed customerId=${req.customer.id}:`, err);
+          })
+        )
+    );
+
+    const cards = resolved
+      .map((r) => ({
+        id: r.paymentMethod.id,
+        brand: r.paymentMethod.card.brand,
+        last4: r.paymentMethod.card.last4,
+        expMonth: r.paymentMethod.card.exp_month,
+        expYear: r.paymentMethod.card.exp_year,
+        priority: r.priority,
+      }))
+      .sort((a, b) => (a.priority === "primary" ? -1 : b.priority === "primary" ? 1 : 0));
+
+    res.json({ cards });
+  } catch (err) {
+    console.error(`[billing/payment-methods] list failed customerId=${req.customer.id}:`, err);
+    res.status(500).json({ error: "stripe_error", message: "お支払い方法の取得に失敗しました。しばらくしてから再度お試しください。" });
+  }
+});
+
+router.delete("/api/billing/payment-methods/:paymentMethodId", requireAuth, async (req, res) => {
+  if (!requireAdminRole(req, res)) return;
+  const stripe = getStripe();
+  if (!stripe) {
+    return res.status(500).json({ error: "stripe_not_configured" });
+  }
+
+  const { paymentMethodId } = req.params;
+
+  try {
+    const pm = await stripe.paymentMethods.retrieve(paymentMethodId);
+    if (pm.customer !== req.customer.stripeCustomerId) {
+      return res.status(403).json({ error: "forbidden" });
+    }
+
+    const list = await stripe.paymentMethods.list({ customer: req.customer.stripeCustomerId, type: "card" });
+    const isLastCard = list.data.length === 1;
+    if (isLastCard && req.customer.stripeSubscriptionId && !customerStore.isCanceled(req.customer)) {
+      return res.status(409).json({
+        error: "last_card_with_active_subscription",
+        message: "有効なサブスクリプションがある間は、最後の1枚のカードを削除できません。先に別のカードを登録してから削除してください。",
+      });
+    }
+
+    const stripeCustomer = await stripe.customers.retrieve(req.customer.stripeCustomerId);
+    const defaultPaymentMethodId = stripeCustomer.invoice_settings && stripeCustomer.invoice_settings.default_payment_method;
+    const resolved = resolvePriorities(list.data, defaultPaymentMethodId);
+    const deletedWasPrimary = resolved.find((r) => r.paymentMethod.id === paymentMethodId)?.priority === "primary";
+
+    await stripe.paymentMethods.detach(paymentMethodId);
+
+    const remaining = resolved.filter((r) => r.paymentMethod.id !== paymentMethodId);
+    if (deletedWasPrimary) {
+      const promoted = remaining[0] || null;
+      if (promoted) {
+        await stripe.paymentMethods.update(promoted.paymentMethod.id, { metadata: { priority: "primary" } });
+        await stripe.customers.update(req.customer.stripeCustomerId, {
+          invoice_settings: { default_payment_method: promoted.paymentMethod.id },
+        });
+      } else {
+        await stripe.customers.update(req.customer.stripeCustomerId, {
+          invoice_settings: { default_payment_method: null },
+        });
+      }
+    }
+
+    res.json({ ok: true });
+  } catch (err) {
+    console.error(`[billing/payment-methods] delete failed customerId=${req.customer.id} paymentMethodId=${paymentMethodId}:`, err);
+    res.status(500).json({ error: "stripe_error", message: "カードの削除に失敗しました。しばらくしてから再度お試しください。" });
+  }
+});
+
+// invoice.payment_failed ウェブフック本体。プライマリカードの決済失敗時、バックアップ
+// カードが登録されていれば即時に再決済を試みる（要件: Stripeのデフォルト挙動では
+// 同一カードへのSmart Retryのみで、別カードへの自動切替は行われないため）。
+async function handleInvoicePaymentFailed(stripe, event) {
+  const invoice = event.data.object;
+  const stripeCustomerId = typeof invoice.customer === "string" ? invoice.customer : invoice.customer && invoice.customer.id;
+
+  if (!stripeCustomerId) {
+    console.warn(`[billing/webhook] invoice.payment_failed without customer, invoiceId=${invoice.id}`);
+    return;
+  }
+
+  const customer = await customerStore.getCustomerByStripeCustomerId(stripeCustomerId);
+  if (!customer) {
+    console.warn(`[billing/webhook] invoice.payment_failed: no matching customer for stripeCustomerId=${stripeCustomerId} invoiceId=${invoice.id}`);
+    return;
+  }
+
+  const [cards, stripeCustomer] = await Promise.all([
+    stripe.paymentMethods.list({ customer: stripeCustomerId, type: "card" }),
+    stripe.customers.retrieve(stripeCustomerId),
+  ]);
+  const defaultPaymentMethodId = stripeCustomer.invoice_settings && stripeCustomer.invoice_settings.default_payment_method;
+  const resolved = resolvePriorities(cards.data, defaultPaymentMethodId);
+  const backup = findBackup(resolved);
+
+  if (!backup) {
+    console.info(`[billing/webhook] invoice.payment_failed: no backup card, leaving to normal dunning. customerId=${customer.id} invoiceId=${invoice.id}`);
+    return;
+  }
+
+  try {
+    // idempotencyKeyはこのWebhookイベント自体の再送による二重課金を防ぐためのもの
+    // （event.idを使う。Stripe自身の督促リトライは別イベント＝別event.idとして発火するため、
+    // そちらは正しく再度リトライ対象になる＝意図した挙動）。
+    const paidInvoice = await stripe.invoices.pay(
+      invoice.id,
+      { payment_method: backup.paymentMethod.id },
+      { idempotencyKey: `invoice-backup-retry:${event.id}` }
+    );
+    console.info(`[billing/webhook] backup card charge succeeded customerId=${customer.id} invoiceId=${invoice.id}`);
+
+    const mailResult = await sendCustomerMail({
+      toEmail: customer.email,
+      subject: BACKUP_CARD_CHARGED_EMAIL.subject,
+      text: BACKUP_CARD_CHARGED_EMAIL.body(paidInvoice.hosted_invoice_url),
+    });
+    if (!mailResult.ok) {
+      console.warn(`[billing/webhook] backup-charged notification mail not sent (${mailResult.error}) customerId=${customer.id}`);
+    }
+  } catch (payErr) {
+    // バックアップカードも失敗した、または一時的なStripe側エラー。通常のStripe自動督促
+    // （dunning）に委ねるため、ここでは何もしない（バックアップが無い/失敗した場合は
+    // 追加処理をしないという要件通り）。
+    console.error(`[billing/webhook] backup card charge failed customerId=${customer.id} invoiceId=${invoice.id}:`, payErr.message);
+    // カード拒否そのもの（想定内）と、Stripe API自体の異常（想定外）を分けて、
+    // 後者だけ運用アラートを飛ばす。
+    if (payErr.type !== "StripeCardError") {
+      await notifyFailure(
+        "[edgeailab] バックアップカード課金処理で予期しないエラー",
+        [`customerId: ${customer.id}`, `invoiceId: ${invoice.id}`, `エラー: ${payErr.message}`].join("\n")
+      );
+    }
+  }
+}
+
 // Stripe Webhookは署名検証のため生ボディが必要なので、このルートだけ
 // express.json()ではなくexpress.raw()をミドルウェアとして適用する。
 router.post("/api/billing/webhook", express.raw({ type: "application/json" }), async (req, res) => {
@@ -233,6 +501,8 @@ router.post("/api/billing/webhook", express.raw({ type: "application/json" }), a
       } else {
         console.warn("[billing/webhook] checkout.session.completed without client_reference_id");
       }
+    } else if (event.type === "invoice.payment_failed") {
+      await handleInvoicePaymentFailed(stripe, event);
     }
     res.json({ received: true });
   } catch (err) {

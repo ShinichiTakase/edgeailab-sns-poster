@@ -40,6 +40,21 @@ async function getCustomerById(id) {
   return res.json();
 }
 
+/** StripeカスタマーIDで顧客レコードを検索する（invoice.payment_failedウェブフック用。
+ *  イベントにはStripeカスタマーIDしか含まれず、内部customerIdは含まれないため必要）。 */
+async function getCustomerByStripeCustomerId(stripeCustomerId) {
+  const res = await microcmsFetch(
+    `/customers?filters=stripeCustomerId[equals]${escFilterValue(stripeCustomerId)}&limit=1`
+  );
+  if (!res.ok) {
+    const text = await res.text().catch(() => "");
+    throw new Error(`[customerStore] getCustomerByStripeCustomerId failed ${res.status} ${text.slice(0, 300)}`);
+  }
+  const json = await res.json();
+  const contents = Array.isArray(json.contents) ? json.contents : [];
+  return contents[0] || null;
+}
+
 async function getCustomerByVerificationToken(token) {
   const res = await microcmsFetch(
     `/customers?filters=verificationToken[equals]${escFilterValue(token)}&limit=1`
@@ -546,6 +561,7 @@ module.exports = {
   getCustomerByEmail,
   customerExistsByEmail,
   getCustomerById,
+  getCustomerByStripeCustomerId,
   getCustomerByVerificationToken,
   createCustomer,
   reactivateCustomer,
