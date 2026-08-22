@@ -240,6 +240,30 @@ async function listPendingBySourceSchedule(scheduleId) {
   return all;
 }
 
+/** 指定顧客の、スケジュール投稿由来・ワンショット予約由来を問わない全pending予約を列挙する。
+ * 解約時にまとめて取り消すために使う（listPendingBySourceScheduleはpost_schedules経由の
+ * 生成分しか拾えないため、ワンショット投稿ウィザードからの直接予約も含めるにはこちらを使う）。 */
+async function listPendingByCustomer(customerCode) {
+  // statusはセレクトフィールド（配列書き込み）のため[contains]で一致させる（listPendingScheduledPosts参照）。
+  const filters = [`customer_code[equals]${encodeURIComponent(customerCode)}`, "status[contains]pending"].join("[and]");
+  const all = [];
+  const limit = 100;
+  let offset = 0;
+  for (;;) {
+    const res = await microcmsFetch(`/scheduled_posts?filters=${filters}&limit=${limit}&offset=${offset}`);
+    if (!res.ok) {
+      const text = await res.text().catch(() => "");
+      throw new Error(`[scheduledPostStore] listPendingByCustomer failed ${res.status} ${text.slice(0, 300)}`);
+    }
+    const json = await res.json();
+    const contents = Array.isArray(json.contents) ? json.contents : [];
+    all.push(...contents);
+    if (contents.length < limit) break;
+    offset += limit;
+  }
+  return all;
+}
+
 async function deleteScheduledPost(id) {
   const res = await microcmsFetch(`/scheduled_posts/${id}`, { method: "DELETE" });
   if (!res.ok && res.status !== 404) {
@@ -256,6 +280,7 @@ module.exports = {
   listDuePendingScheduledPosts,
   listFailedScheduledPosts,
   listPendingBySourceSchedule,
+  listPendingByCustomer,
   markScheduledPostStatus,
   deleteScheduledPost,
   getScheduledPostsSummary,

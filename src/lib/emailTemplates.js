@@ -66,24 +66,6 @@ const INVITATION_EMAIL = {
     ].join("\n"),
 };
 
-const REFERRAL_INVITATION_EMAIL = {
-  subject: (referrerName) => `【EdgeAI Lab】${referrerName}様からsns-posterへのご招待です`,
-  body: (referrerName, signupUrl) =>
-    [
-      `${referrerName}様より、EdgeAI Lab（sns-poster）へのご招待が届いています。`,
-      "",
-      "sns-posterは、X・Threads・Facebook・InstagramへのSNS投稿を",
-      "AIが文案・画像/動画から自動生成し、スケジュール投稿・一括管理できる",
-      "SaaSサービスです。",
-      "",
-      "以下のリンクから新規登録が行えます。",
-      signupUrl,
-      "",
-      "このリンクの有効期限は10日間です。",
-      "心当たりがない場合は、本メールを破棄してください。",
-    ].join("\n"),
-};
-
 const APPROVAL_REQUEST_EMAIL = {
   subject: "【EdgeAI Lab】投稿の承認依頼が届いています",
   body: (requesterName, summary, approvalUrl) =>
@@ -134,7 +116,6 @@ module.exports = {
   TRIAL_ENDING_EMAIL,
   BACKUP_CARD_CHARGED_EMAIL,
   INVITATION_EMAIL,
-  REFERRAL_INVITATION_EMAIL,
   APPROVAL_REQUEST_EMAIL,
   APPROVAL_DECIDED_EMAIL,
   PASSWORD_RESET_EMAIL,

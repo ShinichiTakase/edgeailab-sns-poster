@@ -8,6 +8,7 @@ const { clearSessionCookie } = require("../lib/jwt");
 const { getConnectedEntry, deletePlatformTokensBySlug } = require("../lib/tokenStore");
 const { getStripe } = require("../lib/stripeClient");
 const { notifyFailure } = require("../lib/mailer");
+const { listPendingByCustomer, deleteScheduledPost } = require("../lib/scheduledPostStore");
 
 const router = express.Router();
 
@@ -17,14 +18,19 @@ function currentUserRole(user) {
   return Array.isArray(user.role) ? user.role[0] : user.role;
 }
 
-// 予約投稿・定期実行cronの削除。継続投稿・予約投稿機能自体が未実装のため、
-// 現時点で実際に削除すべきジョブは存在しないはずだが、将来の実装漏れに備えて
-// 解約フローに雛形として組み込んでおく。投稿機能実装時はここに削除処理を追加すること
-// （実行直前のcustomer.status確認によるガード＝requireAuth.jsのblockCanceledCustomerと
-// 二重の安全策になる想定）。
+// 未実行（status=pending）の予約投稿をまとめて削除する。スケジュール投稿由来・
+// ワンショット予約由来の両方を含む（listPendingByCustomer参照）。post_schedules
+// 定義自体は削除・一時停止しないが、scheduleMaterializer.jsはcustomers.status="canceled"の
+// 顧客を生成対象から除外する（isCanceledガード）ため、解約後に新規のscheduled_postsが
+// 生成されることはない。
+// microCMSへの書き込みは並行数が多いと429（Too many requests）で弾かれるため
+// （routes/schedules.jsのtexts/bulk作成時に実際に発生していた）、1件ずつ順番に削除する。
 async function cancelScheduledJobsForCustomer(customerId) {
-  // TODO: 継続投稿・予約投稿機能の実装時、該当customerIdの予約投稿・cronジョブを
-  // ここで削除する処理を追加する。
+  const pending = await listPendingByCustomer(customerId);
+  for (const post of pending) {
+    await deleteScheduledPost(post.id);
+  }
+  return pending.length;
 }
 
 router.post("/api/account/cancel", requireAuth, async (req, res) => {
@@ -89,7 +95,8 @@ router.post("/api/account/cancel", requireAuth, async (req, res) => {
       }
     }
 
-    await cancelScheduledJobsForCustomer(customer.id);
+    const canceledScheduledPostCount = await cancelScheduledJobsForCustomer(customer.id);
+    console.info(`[account/cancel] canceled pending scheduled posts customerId=${customer.id} count=${canceledScheduledPostCount}`);
 
     // clearSessionCookieはブラウザにCookie削除を指示するだけでJWT自体は失効させないため、
     // resetPassword/changePasswordと同様にusers[].sessionVersionを全員分インクリメントし、

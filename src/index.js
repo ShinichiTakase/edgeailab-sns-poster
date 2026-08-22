@@ -16,7 +16,6 @@ const uploadsRoutes = require("./routes/uploads");
 const aiRoutes = require("./routes/ai");
 const schedulesRoutes = require("./routes/schedules");
 const scheduleVideosRoutes = require("./routes/scheduleVideos");
-const referralRoutes = require("./routes/referral");
 const approvalsRoutes = require("./routes/approvals");
 const invoicesRoutes = require("./routes/invoices");
 
@@ -36,7 +35,6 @@ app.use(uploadsRoutes);
 app.use(aiRoutes);
 app.use(schedulesRoutes);
 app.use(scheduleVideosRoutes);
-app.use(referralRoutes);
 app.use(approvalsRoutes);
 app.use(invoicesRoutes);
 

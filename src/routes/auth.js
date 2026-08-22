@@ -98,7 +98,7 @@ router.post("/api/auth/check-email", express.json(), async (req, res) => {
 });
 
 router.post("/api/auth/signup", express.json(), async (req, res) => {
-  const { email, password, plan, contactName, companyName, referralToken } = req.body || {};
+  const { email, password, plan, contactName, companyName } = req.body || {};
   if (!isValidEmail(email)) {
     return res.status(400).json({ error: "invalid_email" });
   }
@@ -123,23 +123,6 @@ router.post("/api/auth/signup", express.json(), async (req, res) => {
       return res.status(409).json({ error: "email_exists" });
     }
 
-    // 紹介トークンは招待メール経由の任意項目。フロント側（signup.html）で
-    // 事前に/api/referral/infoで有効性を案内済みだが、ここでもサーバー側で
-    // 再検証する。無効・期限切れでもサインアップ自体は妨げず、
-    // referredByCustomerIdの記録のみ行わない（黙ってスキップ）。
-    let referredByCustomerId = null;
-    if (typeof referralToken === "string" && referralToken) {
-      const found = await customerStore.findCustomerAndReferralByToken(referralToken);
-      if (found) {
-        const referralExpiresAt = found.referral.expiresAt
-          ? new Date(found.referral.expiresAt).getTime()
-          : 0;
-        if (referralExpiresAt && referralExpiresAt >= Date.now()) {
-          referredByCustomerId = found.customer.id;
-        }
-      }
-    }
-
     const passwordHash = await bcrypt.hash(password, BCRYPT_ROUNDS);
     const verificationToken = crypto.randomBytes(32).toString("hex");
     const verifyExpiresAt = new Date(Date.now() + VERIFICATION_TOKEN_TTL_MS).toISOString();
@@ -160,11 +143,6 @@ router.post("/api/auth/signup", express.json(), async (req, res) => {
     const customer = existing
       ? await customerStore.reactivateCustomer(existing.id, customerParams)
       : await customerStore.createCustomer(customerParams);
-
-    if (referredByCustomerId) {
-      await customerStore.updateCustomer(customer.id, { referredByCustomerId });
-      customer.referredByCustomerId = referredByCustomerId;
-    }
 
     const mailResult = await sendCustomerMail({
       toEmail: customer.email,
