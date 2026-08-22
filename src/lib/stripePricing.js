@@ -28,4 +28,21 @@ function pricesForPlan(plan) {
   return map[plan] || null;
 }
 
-module.exports = { planKey, pricesForPlan };
+// StripeのPrice IDから、どのプラン・どの種別（base/metered/meteredX）かを逆引きする。
+// 請求情報一覧（billing.js）で、過去invoiceのline itemを②基本料金/③従量料金/④Xサーチャージに
+// 分類するために使う。顧客が過去にプラン変更している場合もあるため、現在のプランだけでなく
+// 全プランのPrice IDを対象に検索する。
+const PLAN_LABELS_JA = { basic: "Basic", standard: "Standard", advanced: "Advanced" };
+
+function classifyPriceId(priceId) {
+  for (const plan of ["basic", "standard", "advanced"]) {
+    const prices = pricesForPlan(plan);
+    if (!prices) continue;
+    if (prices.base === priceId) return { plan, planLabel: PLAN_LABELS_JA[plan], category: "base" };
+    if (prices.metered === priceId) return { plan, planLabel: PLAN_LABELS_JA[plan], category: "metered" };
+    if (prices.meteredX === priceId) return { plan, planLabel: PLAN_LABELS_JA[plan], category: "meteredX" };
+  }
+  return null;
+}
+
+module.exports = { planKey, pricesForPlan, classifyPriceId };

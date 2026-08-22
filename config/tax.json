@@ -1,0 +1,7 @@
+{
+  "consumption_tax": {
+    "rate": 0.10,
+    "label": "消費税（10%）",
+    "last_updated": "2026-08-22"
+  }
+}

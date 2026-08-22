@@ -14,6 +14,7 @@ RUN npm install --omit=dev
 COPY src ./src
 COPY config ./config
 COPY bgm ./bgm
+COPY assets ./assets
 
 EXPOSE 3000
 
