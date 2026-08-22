@@ -61,12 +61,10 @@ Checkoutの`trial_end`設定は、この33日基準のtrialEndsAtをそのまま
 0 5 * * * cd /opt/project/deploy/xserver-vps && docker compose run --rm sns-poster-trial-reminder-check
 ```
 
-## Instagram Reels投稿の削除不可（要FAQ/ヘルプ文書化・未対応）
+## Instagram Reels投稿の削除不可
 Instagram Graph APIは公開済みメディアの削除エンドポイントを提供していない
 （`DELETE /{media-id}`は`Unsupported delete request`エラーになる。実機検証済み、
 2026-08-19）。動画生成機能（[src/lib/videoGenerator.js](src/lib/videoGenerator.js)・
 [postReel](src/lib/instagramPoster.js)）で誤って投稿してしまった場合も、このAPI経由では
 取り消せず、顧客自身がInstagramアプリ側から手動削除する以外に手段がない。
-**TODO: ダッシュボードのFAQまたはヘルプ文書に「投稿後の削除は各SNSアプリから
-手動で行う必要があります」旨を追記すること**（2026-08-19時点で未着手。FAQページ自体が
-まだプレースホルダー`<a href="#">`のため、FAQページ実装と合わせて対応する想定）。
+2026-08-22、edgeailab.net/faq.htmlのQ21にこの旨を追記済み。

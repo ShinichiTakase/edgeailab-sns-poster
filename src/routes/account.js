@@ -43,8 +43,9 @@ router.post("/api/account/cancel", requireAuth, async (req, res) => {
   const customer = req.customer;
 
   try {
+    const stripe = getStripe();
+
     if (customer.stripeSubscriptionId) {
-      const stripe = getStripe();
       if (stripe) {
         try {
           await stripe.subscriptions.cancel(customer.stripeSubscriptionId);
@@ -84,6 +85,41 @@ router.post("/api/account/cancel", requireAuth, async (req, res) => {
             "customers.statusはcanceledに更新されますが、Stripe側のサブスクリプションが",
             "解約されずに残っています。Stripe管理画面で手動解約してください。",
           ].join("\n")
+        );
+      }
+    }
+
+    // 解約後もStripe Customerにカードが残り続けないよう、登録済みの
+    // カード情報（PaymentMethod）をすべてdetachする（FAQ「解約した場合は
+    // 自動的にカード情報は削除されます」の実体）。
+    if (customer.stripeCustomerId) {
+      if (stripe) {
+        try {
+          const cards = await stripe.paymentMethods.list({ customer: customer.stripeCustomerId, type: "card" });
+          for (const pm of cards.data) {
+            await stripe.paymentMethods.detach(pm.id);
+          }
+        } catch (err) {
+          console.error(
+            `[account/cancel] failed to detach cards customerId=${customer.id} stripeCustomerId=${customer.stripeCustomerId}:`,
+            err
+          );
+          await notifyFailure(
+            "[edgeailab] 解約処理でStripe連携エラー",
+            [
+              `customerId: ${customer.id}`,
+              `email: ${customer.email}`,
+              `stripeCustomerId: ${customer.stripeCustomerId}`,
+              `エラー: ${err.message}`,
+              "",
+              "customers.statusはcanceledに更新されますが、Stripe側のカード情報が",
+              "削除されずに残っています。Stripe管理画面で手動削除してください。",
+            ].join("\n")
+          );
+        }
+      } else {
+        console.error(
+          `[account/cancel] Stripe not configured, could not detach cards customerId=${customer.id}`
         );
       }
     }

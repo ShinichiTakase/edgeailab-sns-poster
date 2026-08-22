@@ -6,6 +6,8 @@ const { sendCustomerMail } = require("../lib/customerMailer");
 const { INVITATION_EMAIL } = require("../lib/emailTemplates");
 const { signSession, setSessionCookie } = require("../lib/jwt");
 const { requireAuth, requireVerified } = require("../middleware/requireAuth");
+const { planKey } = require("../lib/stripePricing");
+const { getMaxTeamMembers } = require("../lib/teamMemberLimitsConfig");
 
 const router = express.Router();
 
@@ -78,6 +80,16 @@ router.post("/api/team/invite", requireAuth, requireVerified, express.json(), as
     const existing = (req.customer.users || []).find((u) => (u.email || "").toLowerCase() === target);
     if (existing && invitationStatusOf(existing) === "承諾済み") {
       return res.status(409).json({ error: "already_member" });
+    }
+
+    // 新規招待（=users配列への要素追加）の場合のみプラン上限をチェックする。
+    // 既存のpending招待の再送（reissueInvitation）は配列長を増やさないため対象外。
+    if (!existing) {
+      const maxMembers = getMaxTeamMembers(planKey(req.customer));
+      const currentCount = (req.customer.users || []).length;
+      if (currentCount >= maxMembers) {
+        return res.status(403).json({ error: "member_limit_reached", max: maxMembers });
+      }
     }
 
     const invitationToken = crypto.randomBytes(32).toString("hex");
