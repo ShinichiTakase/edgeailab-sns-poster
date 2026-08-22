@@ -119,14 +119,38 @@ router.post("/api/team/invite", requireAuth, requireVerified, express.json(), as
 // メンバー一覧（team.htmlの表示・招待モーダルの承認者候補取得の両方に使う）。
 // role問わず閲覧可能（承認者選択のためには編集者自身も一覧を見られる必要がある）。
 router.get("/api/team/members", requireAuth, async (req, res) => {
-  const members = (req.customer.users || []).map((u) => ({
+  const members = (req.customer.users || []).map((u, index) => ({
     userId: u.userId || null,
     name: u.name || "",
     email: u.email || "",
     role: currentUserRole(u),
     status: invitationStatusOf(u),
+    // users配列の先頭＝アカウント作成者（サインアップ時に作られる唯一の初期要素で、
+    // 以降の招待は必ず配列末尾に追加されるため、先頭であることが保証される）。
+    // 誤操作防止のため、フロント側はこのメンバーに削除ボタンを出さない。
+    isOwner: index === 0,
   }));
   res.json({ members });
+});
+
+// メンバー削除。最上位の権利者（isOwner）は削除できない
+// （customerStore.removeMemberで拒否される）。
+router.delete("/api/team/members/:email", requireAuth, async (req, res) => {
+  if (currentUserRole(req.user) !== "管理者") {
+    return res.status(403).json({ error: "forbidden" });
+  }
+
+  try {
+    const result = await customerStore.removeMember(req.customer.id, req.params.email);
+    if (!result.ok) {
+      const status = result.error === "owner_cannot_be_removed" ? 403 : 404;
+      return res.status(status).json({ error: result.error });
+    }
+    res.json({ ok: true });
+  } catch (err) {
+    console.error("[team/members] delete failed:", err);
+    res.status(500).json({ error: "internal_error" });
+  }
 });
 
 router.get("/api/team/invite-info", async (req, res) => {

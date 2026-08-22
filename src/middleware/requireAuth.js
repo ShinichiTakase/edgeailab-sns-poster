@@ -6,6 +6,7 @@ const {
   isTrialExpiredWithoutPayment,
   isTrialPostLimitReached,
   isCanceled,
+  roleOf,
   TRIAL_POST_LIMIT,
 } = require("../lib/customerStore");
 
@@ -103,12 +104,24 @@ function blockCanceledCustomer(req, res, next) {
   next();
 }
 
+// requireAuthの後段に挟んで使う。閲覧者ロールは投稿・スケジュール編集・AI生成・
+// アップロード・SNS連携解除など「実害のある書き込み操作」を一切行えない設計とする
+// （2026-08-22時点まで、閲覧者ロールにはこの制限が一切実装されておらず、実質的に
+// 管理者と同じ操作ができてしまっていた。書き込み系エンドポイントには必ずこれを挟むこと）。
+function blockViewerRole(req, res, next) {
+  if (roleOf(req.user) === "閲覧者") {
+    return res.status(403).json({ error: "forbidden", message: "閲覧者権限ではこの操作はできません" });
+  }
+  next();
+}
+
 module.exports = {
   requireAuth,
   requireVerified,
   blockExpiredTrial,
   requireUnderTrialPostLimit,
   blockCanceledCustomer,
+  blockViewerRole,
   readSessionToken,
   parseCookieHeader,
 };

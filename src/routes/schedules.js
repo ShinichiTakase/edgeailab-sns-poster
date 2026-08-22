@@ -2,7 +2,7 @@
 // 実際の投稿生成・実行は scheduleMaterializer.js / scheduledPostRunner.js（cron）が担い、
 // このルートはスケジュール本体・投稿文章の設定管理のみを扱う。
 const express = require("express");
-const { requireAuth, requireVerified, blockExpiredTrial } = require("../middleware/requireAuth");
+const { requireAuth, requireVerified, blockExpiredTrial, blockViewerRole } = require("../middleware/requireAuth");
 const scheduleStore = require("../lib/scheduleStore");
 const scheduleTextStore = require("../lib/scheduleTextStore");
 const { listPendingBySourceSchedule, deleteScheduledPost } = require("../lib/scheduledPostStore");
@@ -130,7 +130,7 @@ router.get("/api/schedules", requireAuth, async (req, res) => {
   }
 });
 
-router.post("/api/schedules", requireAuth, requireVerified, blockExpiredTrial, express.json(), async (req, res) => {
+router.post("/api/schedules", requireAuth, requireVerified, blockExpiredTrial, blockViewerRole, express.json(), async (req, res) => {
   const validationError = validateScheduleInput(req.body || {});
   if (validationError) {
     return res.status(400).json({ error: validationError });
@@ -171,7 +171,7 @@ router.get("/api/schedules/:id", requireAuth, async (req, res) => {
   }
 });
 
-router.patch("/api/schedules/:id", requireAuth, requireVerified, blockExpiredTrial, express.json(), async (req, res) => {
+router.patch("/api/schedules/:id", requireAuth, requireVerified, blockExpiredTrial, blockViewerRole, express.json(), async (req, res) => {
   const validationError = validateScheduleInput(req.body || {});
   if (validationError) {
     return res.status(400).json({ error: validationError });
@@ -207,7 +207,7 @@ router.patch("/api/schedules/:id", requireAuth, requireVerified, blockExpiredTri
 });
 
 // 一時停止トグル（ユーザー操作。is_pausedのみ操作し、システム側のauto_pausedには触れない）。
-router.patch("/api/schedules/:id/pause", requireAuth, express.json(), async (req, res) => {
+router.patch("/api/schedules/:id/pause", requireAuth, blockViewerRole, express.json(), async (req, res) => {
   const isPaused = Boolean((req.body || {}).isPaused);
   try {
     const schedule = await scheduleStore.getScheduleById(req.params.id);
@@ -226,7 +226,7 @@ router.patch("/api/schedules/:id/pause", requireAuth, express.json(), async (req
   }
 });
 
-router.delete("/api/schedules/:id", requireAuth, async (req, res) => {
+router.delete("/api/schedules/:id", requireAuth, blockViewerRole, async (req, res) => {
   try {
     const schedule = await scheduleStore.getScheduleById(req.params.id);
     if (!schedule || schedule.customer_code !== req.customer.id) {
@@ -302,6 +302,7 @@ router.post(
   requireAuth,
   requireVerified,
   blockExpiredTrial,
+  blockViewerRole,
   express.json(),
   async (req, res) => {
     try {
@@ -381,7 +382,7 @@ router.post(
   }
 );
 
-router.post("/api/schedules/:id/texts", requireAuth, requireVerified, blockExpiredTrial, express.json(), async (req, res) => {
+router.post("/api/schedules/:id/texts", requireAuth, requireVerified, blockExpiredTrial, blockViewerRole, express.json(), async (req, res) => {
   try {
     const schedule = await loadOwnedSchedule(req, res);
     if (!schedule) return;
@@ -416,6 +417,7 @@ router.patch(
   requireAuth,
   requireVerified,
   blockExpiredTrial,
+  blockViewerRole,
   express.json(),
   async (req, res) => {
     try {
@@ -446,7 +448,7 @@ router.patch(
   }
 );
 
-router.delete("/api/schedules/:id/texts/:textId", requireAuth, async (req, res) => {
+router.delete("/api/schedules/:id/texts/:textId", requireAuth, blockViewerRole, async (req, res) => {
   try {
     const schedule = await loadOwnedSchedule(req, res);
     if (!schedule) return;

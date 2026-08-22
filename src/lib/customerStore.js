@@ -290,6 +290,32 @@ async function acceptInvitation(customerId, invitationToken, passwordHash) {
   return updatedUser;
 }
 
+/**
+ * メンバーを削除する。最上位の権利者（アカウント作成者。users配列の先頭要素＝
+ * サインアップ時に作られる唯一の初期要素で、以降の招待は必ず配列末尾に追加される
+ * ため、先頭＝作成者であることが保証される）は削除できない。
+ * users配列から該当要素を取り除くだけで、その場でrequireAuthの
+ * 「該当userIdがcustomer.usersに存在しない」チェックに引っかかるようになり、
+ * 既存セッション（JWT）も含めて即座にアクセス不能になる（sessionVersion方式と
+ * 同じく確実な失効だが、要素自体が無くなるため個別のバージョン加算は不要）。
+ * @returns {Promise<{ok: true} | {ok: false, error: "owner_cannot_be_removed" | "member_not_found"}>}
+ */
+async function removeMember(customerId, email) {
+  const customer = await getCustomerById(customerId);
+  if (!customer) {
+    throw new Error(`[customerStore] removeMember: customer not found id=${customerId}`);
+  }
+  const users = Array.isArray(customer.users) ? customer.users : [];
+  const target = email.trim().toLowerCase();
+  const index = users.findIndex((u) => (u.email || "").toLowerCase() === target);
+  if (index === -1) return { ok: false, error: "member_not_found" };
+  if (index === 0) return { ok: false, error: "owner_cannot_be_removed" };
+
+  const newUsers = users.filter((_, i) => i !== index);
+  await updateCustomer(customerId, { users: newUsers });
+  return { ok: true };
+}
+
 /** パスワード再設定トークンに一致する users 要素を持つ顧客を探す */
 async function findCustomerAndUserByResetToken(token) {
   const customers = await listAllCustomers();
@@ -587,6 +613,7 @@ module.exports = {
   addInvitedUser,
   reissueInvitation,
   acceptInvitation,
+  removeMember,
   addReferral,
   findCustomerAndReferralByToken,
   addCoins,
