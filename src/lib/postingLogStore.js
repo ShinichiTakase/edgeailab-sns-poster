@@ -23,24 +23,37 @@ function currentBillingPeriod() {
  * @param {string} platform "x" | "threads" | "facebook" | "instagram"
  */
 async function createPostingLog({ customerCode, createdBy, platform, content, platformPostId, containsUrl, meterEventSent, accountName }) {
-  const res = await microcmsFetch(`/posting_logs`, {
-    method: "POST",
-    body: JSON.stringify({
-      customer_code: customerCode,
-      created_by: createdBy,
-      platform: [PLATFORM_LABELS[platform]],
-      content: content || "",
-      platform_post_id: platformPostId,
-      posted_at: new Date().toISOString(),
-      billing_period: currentBillingPeriod(),
-      meter_event_sent: Boolean(meterEventSent),
-      contains_url: Boolean(containsUrl),
-      // 投稿時点で実際にトークンが紐づいていたSNSアカウント名（例: Instagramのusername）。
-      // 「連携し直したら別アカウントに投稿されていた」事故（2026-08-21）の再発時に、
-      // どのアカウントに投稿されたかを事後追跡できるようにするため。
-      account_name: accountName || "",
-    }),
-  });
+  const body = {
+    customer_code: customerCode,
+    created_by: createdBy,
+    platform: [PLATFORM_LABELS[platform]],
+    content: content || "",
+    platform_post_id: platformPostId,
+    posted_at: new Date().toISOString(),
+    billing_period: currentBillingPeriod(),
+    meter_event_sent: Boolean(meterEventSent),
+    contains_url: Boolean(containsUrl),
+    // 投稿時点で実際にトークンが紐づいていたSNSアカウント名（例: Instagramのusername）。
+    // 「連携し直したら別アカウントに投稿されていた」事故（2026-08-21）の再発時に、
+    // どのアカウントに投稿されたかを事後追跡できるようにするため。
+    account_name: accountName || "",
+  };
+  let res = await microcmsFetch(`/posting_logs`, { method: "POST", body: JSON.stringify(body) });
+
+  // account_nameフィールドがmicroCMS側のposting_logsスキーマにまだ追加されていない環境
+  // （手動でのスキーマ追加が必要、2026-08-22時点で未実施）では、このフィールドを含めた
+  // 書き込みが400で拒否され、ログ自体が一切記録できなくなってしまう。投稿ログの記録は
+  // 投稿成否そのものより優先度が低いため、フィールド未対応が原因の場合はこのフィールドを
+  // 落として再送し、記録自体は失わないようにする（フィールド追加後は自動的に記録されるようになる）。
+  if (!res.ok && res.status === 400) {
+    const text = await res.text().catch(() => "");
+    if (text.includes("account_name")) {
+      console.warn("[postingLogStore] account_name field not present in microCMS schema yet; retrying without it");
+      const { account_name, ...bodyWithoutAccountName } = body;
+      res = await microcmsFetch(`/posting_logs`, { method: "POST", body: JSON.stringify(bodyWithoutAccountName) });
+    }
+  }
+
   if (!res.ok) {
     const text = await res.text().catch(() => "");
     throw new Error(`[postingLogStore] createPostingLog failed ${res.status} ${text.slice(0, 300)}`);
