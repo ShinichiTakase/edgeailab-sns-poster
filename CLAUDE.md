@@ -49,6 +49,18 @@ Checkoutの`trial_end`設定は、この33日基準のtrialEndsAtをそのまま
 0 3 * * * cd /opt/project/deploy/xserver-vps && docker compose run --rm sns-poster-threads-refresh >> /var/log/threads-refresh.log 2>&1
 ```
 
+## トライアル終了リマインドメール（cron）
+`sns-poster-trial-reminder-check`（[src/scripts/trialReminderCheck.js](src/scripts/trialReminderCheck.js)）も同様に
+`profiles: manual`サービス。トライアル終了が残り3日以内（`REMINDER_WINDOW_DAYS`）かつ
+`customers.trialReminderSent`が未送信の顧客にリマインドメールを送信する（1顧客1回のみ）。
+実際のcrontab登録は`/etc/cron.d/edgeailab-net-trial-reminder-check`に日次（毎日5時）で
+実施済み（2026-08-22追加。それ以前はdocker-composeサービス定義自体が存在せず、
+本番で一度も実行されていなかった）。登録例：
+
+```
+0 5 * * * cd /opt/project/deploy/xserver-vps && docker compose run --rm sns-poster-trial-reminder-check
+```
+
 ## Instagram Reels投稿の削除不可（要FAQ/ヘルプ文書化・未対応）
 Instagram Graph APIは公開済みメディアの削除エンドポイントを提供していない
 （`DELETE /{media-id}`は`Unsupported delete request`エラーになる。実機検証済み、
