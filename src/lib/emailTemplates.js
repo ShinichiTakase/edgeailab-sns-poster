@@ -97,6 +97,21 @@ const APPROVAL_DECIDED_EMAIL = {
       .join("\n"),
 };
 
+const SCHEDULED_POST_RESULT_EMAIL = {
+  subject: (success) => `【EdgeAI Lab】予約投稿が${success ? "完了しました" : "失敗しました"}`,
+  body: (scheduleName, platformLabel, content, success) =>
+    [
+      `スケジュール「${scheduleName}」の予約投稿が${success ? "正常に完了しました" : "失敗しました"}。`,
+      "",
+      `投稿先: ${platformLabel}`,
+      "投稿内容:",
+      content || "(内容なし)",
+      ...(success
+        ? []
+        : ["", "自動で再試行を行いましたが、投稿できませんでした。内容をご確認のうえ、必要に応じてスケジュール設定を見直してください。"]),
+    ].join("\n"),
+};
+
 const PASSWORD_RESET_EMAIL = {
   subject: "【EdgeAI Lab】パスワード再設定のご案内",
   body: (resetUrl) =>
@@ -118,6 +133,7 @@ module.exports = {
   INVITATION_EMAIL,
   APPROVAL_REQUEST_EMAIL,
   APPROVAL_DECIDED_EMAIL,
+  SCHEDULED_POST_RESULT_EMAIL,
   PASSWORD_RESET_EMAIL,
   planLabel,
 };

@@ -9,6 +9,8 @@ const { loadStore, accountNameFor } = require("./tokenStore");
 const { getCustomerById, isTrialPostLimitReached, isCanceled } = require("./customerStore");
 const { reportMeterEvent } = require("./meterEvents");
 const { containsUrl, extractFirstUrl } = require("./urlDetection");
+const scheduleStore = require("./scheduleStore");
+const { sendScheduleResultEmail } = require("./scheduleResultMailer");
 const xPoster = require("./xPoster");
 const facebookPoster = require("./facebookPoster");
 const instagramPoster = require("./instagramPoster");
@@ -89,6 +91,17 @@ async function attemptScheduledPost(post, customerCache, logger) {
   );
 
   await markScheduledPostStatus(post.id, "done");
+
+  // スケジュール投稿（post_schedules）由来の予約のみ対象。ワンショット投稿ウィザードからの
+  // 直接予約はsource_schedule_idが空のため対象外（notify_emailはpost_schedules側の設定のため）。
+  if (post.source_schedule_id) {
+    try {
+      const schedule = await scheduleStore.getScheduleById(post.source_schedule_id);
+      await sendScheduleResultEmail({ schedule, customer, post, platform, success: true, logger });
+    } catch (mailErr) {
+      logger.logError(`[scheduledPostExecutor] result email failed id=${post.id}:`, mailErr);
+    }
+  }
 
   const textContainsUrl = Boolean(post.contains_url) || containsUrl(post.content);
   let meterEventSent = false;
