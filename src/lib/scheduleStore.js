@@ -3,7 +3,7 @@
 // 書き込み・読み取りする（Array.isArrayで防御的に読む）。
 const { microcmsFetch } = require("./microcms");
 
-const PLATFORM_LABELS = { x: "x", threads: "threads", facebook: "facebook", instagram: "instagram" };
+const PLATFORM_LABELS = { x: "x", threads: "threads", facebook: "facebook", instagram: "instagram", linkedin: "linkedin" };
 const WEEKDAY_LABELS = { mon: "mon", tue: "tue", wed: "wed", thu: "thu", fri: "fri", sat: "sat", sun: "sun" };
 
 async function listAll(endpoint, filters) {

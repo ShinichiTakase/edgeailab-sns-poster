@@ -5,7 +5,7 @@ const { microcmsFetch } = require("./microcms");
 
 // microCMSのselectフィールド側の有効値は小文字のキーそのもの（"X"等の大文字表示ラベルは
 // 無効値としてエラーなく空配列に落とされるため注意。実測で確認済み）。
-const PLATFORM_LABELS = { x: "x", threads: "threads", facebook: "facebook", instagram: "instagram" };
+const PLATFORM_LABELS = { x: "x", threads: "threads", facebook: "facebook", instagram: "instagram", linkedin: "linkedin" };
 
 function toBillingPeriod(year, month) {
   return `${year}-${String(month).padStart(2, "0")}`;
@@ -107,7 +107,7 @@ async function listAllPostingLogsForCustomer(customerCode) {
 async function getPostStatsForCustomer(customerCode, year, month) {
   const billingPeriod = toBillingPeriod(year, month);
   const logs = await listPostingLogsForCustomer(customerCode, billingPeriod);
-  const counts = { x: 0, threads: 0, facebook: 0, instagram: 0 };
+  const counts = { x: 0, threads: 0, facebook: 0, instagram: 0, linkedin: 0 };
   for (const log of logs) {
     const label = Array.isArray(log.platform) ? log.platform[0] : log.platform;
     const key = Object.keys(PLATFORM_LABELS).find((k) => PLATFORM_LABELS[k] === label);

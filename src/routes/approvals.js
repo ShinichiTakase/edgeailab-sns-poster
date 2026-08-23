@@ -23,6 +23,7 @@ function formatBatch(batch, { includeApprovals = true } = {}) {
           threads: r.threads_text || "",
           facebook: r.facebook_text || "",
           instagram: r.instagram_text || "",
+          linkedin: r.linkedin_text || "",
         }));
   return {
     batchId: batch.batchId,

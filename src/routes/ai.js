@@ -7,7 +7,7 @@ const { getDocsNumber } = require("../lib/generationConfig");
 
 const router = express.Router();
 
-const PLATFORMS = ["x", "threads", "facebook", "instagram"];
+const PLATFORMS = ["x", "threads", "facebook", "instagram", "linkedin"];
 
 function validatePlatforms(platforms) {
   return Array.isArray(platforms) && platforms.length > 0 && platforms.every((p) => PLATFORMS.includes(p));

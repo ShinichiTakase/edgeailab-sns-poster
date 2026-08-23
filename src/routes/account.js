@@ -12,7 +12,7 @@ const { listPendingByCustomer, deleteScheduledPost } = require("../lib/scheduled
 
 const router = express.Router();
 
-const PLATFORMS = ["facebook", "instagram", "threads", "x"];
+const PLATFORMS = ["facebook", "instagram", "threads", "x", "linkedin"];
 
 function currentUserRole(user) {
   return Array.isArray(user.role) ? user.role[0] : user.role;

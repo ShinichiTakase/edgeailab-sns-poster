@@ -3,7 +3,7 @@
 const { classifyPriceId } = require("./stripePricing");
 const { listPostingLogsForCustomer } = require("./postingLogStore");
 
-const PLATFORM_LABELS = { x: "X", threads: "Threads", facebook: "Facebook", instagram: "Instagram" };
+const PLATFORM_LABELS = { x: "X", threads: "Threads", facebook: "Facebook", instagram: "Instagram", linkedin: "LinkedIn" };
 
 // invoice line item の period（Unixタイムスタンプ）から、posting_logsのbilling_period形式
 // （"YYYY-MM"）を導出する。period.end はその期間の終了時刻（翌月1日0時であることが多い）

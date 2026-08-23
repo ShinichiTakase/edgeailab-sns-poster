@@ -16,7 +16,7 @@ const router = express.Router();
 // 「本当に削除ボタンを押したのか」を事後に確認できるよう追加した。
 const { logInfo } = createLogger("sns-connections.log");
 
-const PLATFORMS = ["facebook", "instagram", "threads", "x"];
+const PLATFORMS = ["facebook", "instagram", "threads", "x", "linkedin"];
 
 router.get("/api/sns-connections", requireAuth, (req, res) => {
   const customerId = req.customer.id;

@@ -67,29 +67,42 @@ async function createScheduleText({
   threadsText,
   facebookText,
   instagramText,
+  linkedinText,
   instagramImageUrl,
   instagramVideoUrl,
   sourceExcerpt,
   createdBy,
   approvalFields,
 }) {
-  const res = await microcmsFetch(`/schedule_texts`, {
-    method: "POST",
-    body: JSON.stringify({
-      schedule_id: scheduleId,
-      x_text: xText || "",
-      threads_text: threadsText || "",
-      facebook_text: facebookText || "",
-      instagram_text: instagramText || "",
-      instagram_image_url: instagramImageUrl || "",
-      instagram_video_url: instagramVideoUrl || "",
-      source_excerpt: sourceExcerpt || "",
-      created_by: createdBy || "",
-      // 承認ステータス関連フィールド（approvalStore.jsのbuildApprovalFields/noneApprovalFields）。
-      // 未指定時（既存呼び出し元との後方互換）はnoneApprovalFields相当を明示的に渡すこと。
-      ...(approvalFields || {}),
-    }),
-  });
+  const body = {
+    schedule_id: scheduleId,
+    x_text: xText || "",
+    threads_text: threadsText || "",
+    facebook_text: facebookText || "",
+    instagram_text: instagramText || "",
+    linkedin_text: linkedinText || "",
+    instagram_image_url: instagramImageUrl || "",
+    instagram_video_url: instagramVideoUrl || "",
+    source_excerpt: sourceExcerpt || "",
+    created_by: createdBy || "",
+    // 承認ステータス関連フィールド（approvalStore.jsのbuildApprovalFields/noneApprovalFields）。
+    // 未指定時（既存呼び出し元との後方互換）はnoneApprovalFields相当を明示的に渡すこと。
+    ...(approvalFields || {}),
+  };
+  let res = await microcmsFetch(`/schedule_texts`, { method: "POST", body: JSON.stringify(body) });
+
+  // linkedin_textフィールドがmicroCMS側のschedule_textsスキーマにまだ追加されていない環境
+  // （手動でのスキーマ追加が必要。postingLogStore.jsのaccount_nameと同じ対処方針）では、
+  // このフィールドを含めた書き込みが400で拒否されるため、フィールドを落として再送する。
+  if (!res.ok && res.status === 400) {
+    const errText = await res.text().catch(() => "");
+    if (errText.includes("linkedin_text")) {
+      console.warn("[scheduleTextStore] linkedin_text field not present in microCMS schema yet; retrying without it");
+      const { linkedin_text, ...bodyWithoutLinkedin } = body;
+      res = await microcmsFetch(`/schedule_texts`, { method: "POST", body: JSON.stringify(bodyWithoutLinkedin) });
+    }
+  }
+
   if (!res.ok) {
     const text = await res.text().catch(() => "");
     throw new Error(`[scheduleTextStore] createScheduleText failed ${res.status} ${text.slice(0, 300)}`);
@@ -98,10 +111,24 @@ async function createScheduleText({
 }
 
 async function updateScheduleText(id, patch) {
-  const res = await microcmsFetch(`/schedule_texts/${encodeURIComponent(id)}`, {
+  let res = await microcmsFetch(`/schedule_texts/${encodeURIComponent(id)}`, {
     method: "PATCH",
     body: JSON.stringify(patch),
   });
+
+  // createScheduleTextと同じ対処方針。linkedin_textフィールド未追加環境でも更新自体は失わない。
+  if (!res.ok && res.status === 400 && "linkedin_text" in patch) {
+    const errText = await res.text().catch(() => "");
+    if (errText.includes("linkedin_text")) {
+      console.warn("[scheduleTextStore] linkedin_text field not present in microCMS schema yet; retrying without it");
+      const { linkedin_text, ...patchWithoutLinkedin } = patch;
+      res = await microcmsFetch(`/schedule_texts/${encodeURIComponent(id)}`, {
+        method: "PATCH",
+        body: JSON.stringify(patchWithoutLinkedin),
+      });
+    }
+  }
+
   if (!res.ok) {
     const text = await res.text().catch(() => "");
     throw new Error(`[scheduleTextStore] updateScheduleText failed ${res.status} ${text.slice(0, 300)}`);

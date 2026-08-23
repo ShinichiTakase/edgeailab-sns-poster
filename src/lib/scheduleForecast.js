@@ -4,7 +4,7 @@
 const { matchesWeekday, isDateInScheduleRange, getConfiguredSlots, effectiveDailyCount, dateOnly } = require("./scheduleFiring");
 const { containsUrl } = require("./urlDetection");
 
-const PLATFORM_TEXT_KEY = { x: "x_text", threads: "threads_text", facebook: "facebook_text", instagram: "instagram_text" };
+const PLATFORM_TEXT_KEY = { x: "x_text", threads: "threads_text", facebook: "facebook_text", instagram: "instagram_text", linkedin: "linkedin_text" };
 
 /**
  * windowStart（含む）からwindowEnd（含まない）までの間にこのスケジュールが生成するはずの

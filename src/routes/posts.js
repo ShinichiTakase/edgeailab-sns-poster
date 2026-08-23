@@ -29,10 +29,11 @@ const xPoster = require("../lib/xPoster");
 const facebookPoster = require("../lib/facebookPoster");
 const instagramPoster = require("../lib/instagramPoster");
 const threadsPoster = require("../lib/threadsPoster");
+const linkedinPoster = require("../lib/linkedinPoster");
 
 const router = express.Router();
 
-const PLATFORMS = ["x", "threads", "facebook", "instagram"];
+const PLATFORMS = ["x", "threads", "facebook", "instagram", "linkedin"];
 
 // imageUrlはInstagram投稿専用（UI上も「画像（Instagram投稿には必須）」として案内している）。
 // Facebook/Threadsにまで同じ画像を渡すと写真投稿扱いになり、本文中のURLに対する
@@ -45,6 +46,9 @@ async function postToPlatform(platform, entry, text, imageUrl, facebookPageId) {
   }
   if (platform === "threads") {
     return threadsPoster.postText({ userId: entry.user_id, accessToken: entry.access_token }, text);
+  }
+  if (platform === "linkedin") {
+    return linkedinPoster.postText({ personUrn: entry.user_id, accessToken: entry.access_token }, text, extractFirstUrl(text));
   }
   if (platform === "facebook") {
     const pages = entry.pages || [];
@@ -338,7 +342,7 @@ router.post(
   }
 );
 
-const PLATFORM_DISPLAY_LABELS = { x: "X", threads: "Threads", facebook: "Facebook", instagram: "Instagram" };
+const PLATFORM_DISPLAY_LABELS = { x: "X", threads: "Threads", facebook: "Facebook", instagram: "Instagram", linkedin: "LinkedIn" };
 
 function platformDisplayLabel(value) {
   const key = Array.isArray(value) ? value[0] : value;

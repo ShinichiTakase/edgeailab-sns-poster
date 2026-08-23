@@ -13,7 +13,7 @@ const approvalStore = require("../lib/approvalStore");
 
 const router = express.Router();
 
-const PLATFORMS = ["x", "threads", "facebook", "instagram"];
+const PLATFORMS = ["x", "threads", "facebook", "instagram", "linkedin"];
 const WEEKDAYS = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"];
 
 function buildSlots(body) {
@@ -269,6 +269,7 @@ router.get("/api/schedules/:id/texts", requireAuth, async (req, res) => {
         threadsText: t.threads_text || "",
         facebookText: t.facebook_text || "",
         instagramText: t.instagram_text || "",
+        linkedinText: t.linkedin_text || "",
         instagramImageUrl: t.instagram_image_url || "",
         instagramVideoUrl: t.instagram_video_url || "",
         sourceExcerpt: t.source_excerpt || "",
@@ -284,7 +285,7 @@ router.get("/api/schedules/:id/texts", requireAuth, async (req, res) => {
 function validateTextInput(schedule, body) {
   const platforms = Array.isArray(schedule.platforms) ? schedule.platforms : [];
   for (const platform of platforms) {
-    const key = { x: "xText", threads: "threadsText", facebook: "facebookText", instagram: "instagramText" }[platform];
+    const key = { x: "xText", threads: "threadsText", facebook: "facebookText", instagram: "instagramText", linkedin: "linkedinText" }[platform];
     if (!body[key] || !body[key].trim()) return "text_required";
   }
   // Instagramは画像投稿（旧仕様の単発編集）・動画投稿（新仕様のリール）のいずれかが必須。
@@ -348,6 +349,7 @@ router.post(
             threadsText: entry.threadsText,
             facebookText: entry.facebookText,
             instagramText: entry.instagramText,
+            linkedinText: entry.linkedinText,
             instagramImageUrl: entry.instagramImageUrl,
             instagramVideoUrl: entry.instagramVideoUrl,
             sourceExcerpt,
@@ -400,6 +402,7 @@ router.post("/api/schedules/:id/texts", requireAuth, requireVerified, blockExpir
       threadsText: body.threadsText,
       facebookText: body.facebookText,
       instagramText: body.instagramText,
+      linkedinText: body.linkedinText,
       instagramImageUrl: body.instagramImageUrl,
       sourceExcerpt: typeof body.sourceExcerpt === "string" ? body.sourceExcerpt.slice(0, 200) : "",
       createdBy: req.user.userId,
@@ -437,6 +440,7 @@ router.patch(
         threads_text: body.threadsText || "",
         facebook_text: body.facebookText || "",
         instagram_text: body.instagramText || "",
+        linkedin_text: body.linkedinText || "",
         instagram_image_url: body.instagramImageUrl || "",
         instagram_video_url: body.instagramVideoUrl || "",
       });

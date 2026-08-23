@@ -13,6 +13,7 @@ const xPoster = require("./xPoster");
 const facebookPoster = require("./facebookPoster");
 const instagramPoster = require("./instagramPoster");
 const threadsPoster = require("./threadsPoster");
+const linkedinPoster = require("./linkedinPoster");
 
 function platformKeyFromLabel(value) {
   const label = Array.isArray(value) ? value[0] : value;
@@ -30,6 +31,9 @@ async function postToPlatform(platform, entry, text, imageUrl, videoUrl, faceboo
   }
   if (platform === "threads") {
     return threadsPoster.postText({ userId: entry.user_id, accessToken: entry.access_token }, text);
+  }
+  if (platform === "linkedin") {
+    return linkedinPoster.postText({ personUrn: entry.user_id, accessToken: entry.access_token }, text, extractFirstUrl(text));
   }
   if (platform === "facebook") {
     const pages = entry.pages || [];

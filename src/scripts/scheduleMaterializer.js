@@ -17,7 +17,7 @@ require("dotenv").config({ path: path.join(__dirname, "..", "..", ".env") });
 const scheduleStore = require("../lib/scheduleStore");
 const scheduleTextStore = require("../lib/scheduleTextStore");
 const { createScheduledPost } = require("../lib/scheduledPostStore");
-const { getCustomerById, isTrialPostLimitReached, isCanceled, isTrialExpiredWithoutPayment } = require("../lib/customerStore");
+const { getCustomerById, isTrialPostLimitReached, isCanceled, requiresPaymentRegistration } = require("../lib/customerStore");
 const { containsUrl } = require("../lib/urlDetection");
 const {
   matchesWeekday,
@@ -68,7 +68,7 @@ async function main() {
       }
       // トライアル投稿上限・解約は生成時点でも確認する（実行時にもscheduledPostRunner.js側で
       // 再確認するため二重チェックになるが、無駄な予約生成を避けるためここでも弾く）。
-      if (isCanceled(customer) || isTrialPostLimitReached(customer) || isTrialExpiredWithoutPayment(customer)) {
+      if (isCanceled(customer) || isTrialPostLimitReached(customer) || requiresPaymentRegistration(customer)) {
         continue;
       }
 
@@ -91,9 +91,13 @@ async function main() {
         const scheduledAt = pickRandomTimeInSlot(today, slots[i]);
 
         for (const platform of platforms) {
-          const platformTextKey = { x: "x_text", threads: "threads_text", facebook: "facebook_text", instagram: "instagram_text" }[
-            platform
-          ];
+          const platformTextKey = {
+            x: "x_text",
+            threads: "threads_text",
+            facebook: "facebook_text",
+            instagram: "instagram_text",
+            linkedin: "linkedin_text",
+          }[platform];
           const content = text[platformTextKey] || "";
           if (!content.trim()) continue; // このプラットフォーム分の文章が未入力ならスキップ
 
