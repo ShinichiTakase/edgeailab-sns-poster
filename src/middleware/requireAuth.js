@@ -3,7 +3,7 @@
 const { COOKIE_NAME, verifySession } = require("../lib/jwt");
 const {
   getCustomerById,
-  isTrialExpiredWithoutPayment,
+  requiresPaymentRegistration,
   isTrialPostLimitReached,
   isCanceled,
   roleOf,
@@ -67,11 +67,19 @@ function requireVerified(req, res, next) {
   next();
 }
 
-// requireAuthの後段に挟んで使う。トライアル終了後、支払い情報未登録のまま
-// SNS連携（OAuth認可フロー）を開始しようとした場合にカード登録画面へ誘導する。
+// requireAuthの後段に挟んで使う。トライアル終了後、または解約後の再登録直後
+// （customers.status:"active"だが未決済。customerStore.reactivateCustomer参照）で
+// 支払い情報未登録のまま利用を続けようとした場合にカード登録画面へ誘導する。
+// 名前はblockExpiredTrialのままだが、判定本体（requiresPaymentRegistration）は
+// トライアル経過済みだけでなく「トライアルを経由しない再登録」も対象にする。
+// reasonクエリはトライアル経由か否かで出し分け、upgrade.html側の案内文を
+// 実態に合わせる（トライアルを一度も経ていない再登録者に「トライアル期間が
+// 終了しているため」と表示すると事実と異なるため）。
 function blockExpiredTrial(req, res, next) {
-  if (isTrialExpiredWithoutPayment(req.customer)) {
-    return res.redirect("/upgrade.html?reason=trial_expired");
+  if (requiresPaymentRegistration(req.customer)) {
+    const status = Array.isArray(req.customer.status) ? req.customer.status[0] : req.customer.status;
+    const reason = status === "trial" ? "trial_expired" : "payment_required";
+    return res.redirect(`/upgrade.html?reason=${reason}`);
   }
   next();
 }

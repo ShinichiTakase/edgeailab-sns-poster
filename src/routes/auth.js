@@ -23,7 +23,7 @@ const VERIFICATION_TOKEN_TTL_MS = 24 * 60 * 60 * 1000;
 // ぎりぎりに決済登録されるとこの制約に抵触し即時課金にフォールバックしてしまうため、
 // 常に3日超の余裕を内部的に確保している。
 //
-// アクセス制御（customerStore.isTrialExpiredWithoutPayment）・請求予測
+// アクセス制御（customerStore.requiresPaymentRegistration）・請求予測
 // （billing.js の predictFromScheduledPosts / getActivationYearMonth）・トライアル終了
 // リマインドcron（trialReminderCheck.js）・Stripe Checkoutのtrial_end設定は、
 // このバッファ込みのtrialEndsAtをそのまま使う（変更不要）。
@@ -115,7 +115,9 @@ router.post("/api/auth/signup", express.json(), async (req, res) => {
     // 解約済み（status: canceled）でなければ通常どおり重複拒否。canceledの場合のみ、
     // 新規レコードを作らずreactivateCustomerで既存レコードを再アクティブ化する
     // （解約→同一メールで再サインアップした際に無料トライアルを再取得できてしまう
-    // 抜け穴を塞ぎつつ、正規の再契約は妨げないための分岐）。
+    // 抜け穴を塞ぎつつ、正規の再契約は妨げないための分岐。reactivateCustomerは
+    // トライアルを付与しないため、既存customerのときはこの直後のレスポンスで
+    // requiresPayment: trueを返し、フロント側は即座に支払い登録画面へ誘導する）。
     const existingStatus = existing
       ? (Array.isArray(existing.status) ? existing.status[0] : existing.status)
       : null;
@@ -159,7 +161,7 @@ router.post("/api/auth/signup", express.json(), async (req, res) => {
     const sessionToken = signSession(customer, signedInUser);
     setSessionCookie(res, sessionToken);
 
-    res.json({ ok: true });
+    res.json({ ok: true, requiresPayment: Boolean(existing) });
   } catch (err) {
     console.error("[auth/signup] failed:", err);
     res.status(500).json({ error: "internal_error" });

@@ -379,6 +379,17 @@ async function resetPassword(customerId, resetToken, passwordHash) {
  * （createCustomerの初期状態と揃える）。stripeCustomerIdは同一Stripe顧客を
  * 使い回すためあえて上書きしない。stripeSubscriptionIdは解約済みの古い
  * サブスクリプションを参照したままにならないようクリアする。
+ *
+ * トライアルは付与しない（statusは"trial"にしない。2026-08-22修正：それまでは
+ * ここでstatus:"trial"・新しいtrialEndsAtを設定しており、「解約→同一メールで
+ * 再サインアップした際に無料トライアルを再取得できてしまう抜け穴を塞ぐ」という
+ * 導入時のコミットメッセージの意図に反して、実際には抜け穴をそのまま再現していた）。
+ * customers.statusのselect選択肢はtrial/active/canceledの3つしか定義されていない
+ * ため、代わりに既存の"active"を流用し、trialEndsAtは空にする。決済登録
+ * （stripeSubscriptionId）が完了するまでの間の実際のアクセス制限は
+ * requiresPaymentRegistration()（旧isTrialExpiredWithoutPayment）が担う。
+ * 呼び出し元（routes/auth.js）から渡されるtrialEndsAtパラメータは
+ * 意図的に無視する。
  * @returns 更新後のレコード（idを含む）
  */
 async function reactivateCustomer(id, {
@@ -389,18 +400,17 @@ async function reactivateCustomer(id, {
   companyName,
   verificationToken,
   verifyExpiresAt,
-  trialEndsAt,
 }) {
   await updateCustomer(id, {
     email: email.trim(),
     contactName: contactName.trim(),
     companyName: (companyName || "").trim(),
-    status: ["trial"],
+    status: ["active"],
     plan: [toPlanChoice(plan)],
     isVerified: false,
     verificationToken,
     verifyExpiresAt,
-    trialEndsAt,
+    trialEndsAt: "",
     trialPostCount: 0,
     trialReminderSent: false,
     stripeSubscriptionId: "",
@@ -444,16 +454,34 @@ async function changePassword(customerId, userId, passwordHash) {
   return updatedUser;
 }
 
-// トライアル終了後、支払い情報未登録のまま利用を続けようとしていないかの判定。
-// SNS連携開始前のガード（requireAuth.js の blockExpiredTrial）で使用する。
+// トライアル終了後・または解約後の再登録直後で、支払い情報未登録のまま利用を
+// 続けようとしていないかの判定。SNS連携開始前のガード（requireAuth.js の
+// blockExpiredTrial）・投稿系エンドポイントで使用する。
+//
+// 2026-08-22まではisTrialExpiredWithoutPaymentという名前で「status===trial かつ
+// trialEndsAt経過」のみを判定していたが、解約→同一メールでの再登録
+// （reactivateCustomer）でトライアルを再付与しない設計に変更したことに伴い対象を
+// 拡張した（仕様書作成時のレビューで、reactivateCustomerが実際にはトライアルを
+// 再付与してしまっており「無料トライアル再取得の抜け穴を防ぐ」という導入時の
+// コミットメッセージの意図に反していたことが発覚したため）：
+// - トライアル中（status:"trial"）: 従来通りtrialEndsAtを経過するまでは猶予する
+// - トライアル以外（reactivateCustomer後のstatus:"active"）: customers.statusの
+//   select選択肢がtrial/active/canceledの3つしか定義されておらず「トライアルなし・
+//   未払い」専用の値を追加できないため、既存の"active"を流用している。この場合は
+//   猶予期間を設けず、stripeSubscriptionId未登録なら常に支払い必須と判定する
+//   （正規のStripe決済完了時は必ずstripeSubscriptionIdと同時にstatus:"active"が
+//   セットされるため、実際に課金済みの顧客が誤ってブロックされることはない）
+// - 解約済み（status:"canceled"）は対象外（blockCanceledCustomer側の専用ガードに委ねる）
+//
 // customer.trialEndsAtは「表向き」の日数より3日長い内部バッファ込みの値
 // （routes/auth.js の TRIAL_INTERNAL_BUFFER_DAYS 参照）。ここでは意図的にそのまま使う。
-function isTrialExpiredWithoutPayment(customer) {
+function requiresPaymentRegistration(customer) {
+  if (customer.stripeSubscriptionId) return false;
   const status = Array.isArray(customer.status) ? customer.status[0] : customer.status;
-  if (status !== "trial") return false;
+  if (status === "canceled") return false;
+  if (status !== "trial") return true;
   if (!customer.trialEndsAt) return false;
-  if (new Date(customer.trialEndsAt).getTime() >= Date.now()) return false;
-  return !customer.stripeSubscriptionId;
+  return new Date(customer.trialEndsAt).getTime() < Date.now();
 }
 
 // トライアル中の投稿数上限（全SNS合計）。即時投稿（routes/posts.js）・予約投稿の
@@ -524,7 +552,7 @@ module.exports = {
   toPlanChoice,
   markVerified,
   changePassword,
-  isTrialExpiredWithoutPayment,
+  requiresPaymentRegistration,
   TRIAL_POST_LIMIT,
   getTrialPostCount,
   isTrialPostLimitReached,

@@ -3,10 +3,10 @@
 // `docker compose run --rm sns-poster-schedule-auto-pause-sync` で日次起動する想定
 // （実際のcrontab登録は手動実施。CLAUDE.md参照）。
 //
-// - トライアルが終了し支払い未登録（isTrialExpiredWithoutPayment）の顧客について、
-//   auto_paused=false な全スケジュールをauto_paused=trueにし、未実行の生成済み
-//   scheduled_posts（source_schedule_id紐付け・pending）を取り消す。
-// - 支払い登録済み等でisTrialExpiredWithoutPaymentがfalseに戻った顧客について、
+// - トライアルが終了、または解約後の再登録直後で支払い未登録（requiresPaymentRegistration）
+//   の顧客について、auto_paused=false な全スケジュールをauto_paused=trueにし、未実行の
+//   生成済みscheduled_posts（source_schedule_id紐付け・pending）を取り消す。
+// - 支払い登録済み等でrequiresPaymentRegistrationがfalseに戻った顧客について、
 //   auto_paused=true なスケジュールをauto_paused=falseに戻す
 //   （is_paused、つまりユーザー自身による一時停止には一切触れない）。
 const path = require("path");
@@ -14,7 +14,7 @@ require("dotenv").config({ path: path.join(__dirname, "..", "..", ".env") });
 
 const scheduleStore = require("../lib/scheduleStore");
 const { listPendingBySourceSchedule, deleteScheduledPost } = require("../lib/scheduledPostStore");
-const { getCustomerById, isTrialExpiredWithoutPayment } = require("../lib/customerStore");
+const { getCustomerById, requiresPaymentRegistration } = require("../lib/customerStore");
 const { logInfo, logError } = require("../lib/logger").createLogger("schedule-auto-pause-sync.log");
 
 // microCMSへの書き込みは並行数が多いと429（Too many requests）で弾かれるため
@@ -47,7 +47,7 @@ async function main() {
       const customer = await getCustomerCached(schedule.customer_code);
       if (!customer) continue;
 
-      const shouldBeAutoPaused = isTrialExpiredWithoutPayment(customer);
+      const shouldBeAutoPaused = requiresPaymentRegistration(customer);
       const isCurrentlyAutoPaused = Boolean(schedule.auto_paused);
 
       if (shouldBeAutoPaused && !isCurrentlyAutoPaused) {
