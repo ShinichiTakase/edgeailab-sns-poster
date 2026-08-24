@@ -66,15 +66,46 @@ sns-poster/src/lib/planLimitsConfig.js, sns-poster/config/planLimits.json
   後始末処理の成否に引きずられさせないため
 - レスポンスに`canceledScheduledPostCount`を追加（フロント側は現状未使用。将来UIで
   「◯件の予約投稿もキャンセルされました」と案内する際に使える）
-- **post_schedules（スケジュール設定）自体の`platforms`からの除去、およびcronによる
-  新規`scheduled_posts`生成の抑止は行っていない**（対応範囲外、要確認事項参照）。
-  そのプラットフォームを含む`post_schedules`が稼働中のままなら、翌日以降
-  `scheduleMaterializer.js`が再びそのプラットフォーム宛ての`scheduled_posts`
-  （status=pending）を生成し、実行時に同じ`not_connected`失敗を繰り返す
+- post_schedules（スケジュール設定）自体の`platforms`からの除去は行っていない
+  （プラットフォームを再連携すれば自動的に元の設定のまま復活する、という挙動を
+  維持するため意図的にそのまま）。ただし翌日以降の再生成自体は下記の恒久対策で
+  止まるため、実害は無い
 - テスト: `src/routes/snsConnections.test.js`（`node --test`。tokenStore・
   scheduledPostStoreをすべてフェイクに差し替えた統合テスト。「対象プラットフォームの
   pendingのみキャンセルされ他プラットフォームは影響を受けない」「未連携なら404で
   キャンセル処理自体が走らない」「閲覧者は403」等を検証）
+
+## 恒久対策: scheduleMaterializer.jsでの接続状況ガード（2026-08-25追加）
+
+上記のdisconnect時キャンセルだけでは「今ある予約」しか消せず、そのプラットフォーム
+を含む`post_schedules`が稼働中のまま残っていると、翌日以降のmaterializerが同じ
+プラットフォーム宛ての`scheduled_posts`を再生成し、実行時に`not_connected`失敗を
+繰り返してしまう問題が残っていた。これに対する恒久対策として、
+`src/scripts/scheduleMaterializer.js`の生成ループに接続状況チェックを追加した。
+
+- スケジュールごとに`tokenStore.getConnectedEntry(schedule.customer_code)`を1回だけ
+  呼び出し（`i`ループの外、`platforms`ループの外側で計算してキャッシュ）、プラット
+  フォームごとのループ内で`if (!connectedEntry[platform]) continue;`により、
+  未接続のプラットフォームだけを個別にスキップする（テキスト未入力時のスキップ
+  `if (!content.trim()) continue;`と同じ「1プラットフォームだけ静かにスキップする」
+  パターンを踏襲）
+- スケジュールが複数プラットフォームを対象にしている場合、連携解除したプラットフォーム
+  分のみ生成をスキップし、**接続が残っている他のプラットフォーム分は通常通り生成される**
+  （スケジュール全体を止めるのではなく、プラットフォーム単位で止める設計）
+- `post_schedules.platforms`自体は書き換えないため、後日そのプラットフォームを
+  再連携すれば、次回materialize時から自動的に生成が再開する（ユーザー側でスケジュール
+  設定を再入力する必要はない）
+- スキップされた分だけ生成数が減るが、`last_materialized_dt`の更新・
+  `round_robin_index`の消費は従来通り行われる（テキスト未入力時のスキップと同じ扱い。
+  1プラットフォームだけ未接続でも、その日のスケジュール全体が「未生成」のまま
+  取り残されることはない）
+- アカウント解約時の`isCanceled`ガード（顧客単位で生成自体を止める）と同種の設計だが、
+  こちらは「顧客×プラットフォーム」単位で止める点が異なる
+- 検証: 本番環境で`docker compose run --rm sns-poster-schedule-materializer`を
+  手動実行し、実在する稼働中スケジュール5件に対してエラー無く完了することを確認済み
+  （`last_materialized_dt`により当日分は冪等スキップされるため、本番データに対して
+  安全に手動実行できる）。cron専用スクリプトのため`node --test`によるモック化した
+  自動テストは追加していない（既存の他cronスクリプトにも同様のテストは無い）
 
 ## OAuthフロー（4プラットフォーム共通の骨格・相違点）
 
@@ -224,12 +255,8 @@ OAuth開始route専用のサーバーサイドゲート。2段階チェック:
 - Instagramのアカウント切り替え確認フローは実際の事故を受けて追加された唯一の例外的
   ガード。他3プラットフォームは再認証時に無確認で即座に上書きする
 - 連携解除時のpending予約キャンセル（上記）は「今ある予約」のみが対象で、
-  post_schedules定義自体は変更しない。そのプラットフォームを含むスケジュールが
-  稼働中のまま残っていると、翌日以降のmaterializerが同プラットフォーム宛ての
-  予約を再生成し、実行時に`not_connected`で失敗する状態が繰り返される（アカウント
-  解約時は`customers.status="canceled"`を`scheduleMaterializer.js`のガードで
-  検知して新規生成自体を止めているが、SNS連携解除だけでは顧客ステータスは変化しない
-  ため同じ安全策が効かない）。恒久対応するなら、`scheduleMaterializer.js`の生成前に
-  `tokenStore.getConnectedEntry`で該当プラットフォームの接続有無を確認するガードを
-  追加するか、連携解除時に該当プラットフォームを含む`post_schedules.platforms`から
-  除去する処理が必要
+  post_schedules定義自体は変更しない。**2026-08-25時点では、この残課題は
+  scheduleMaterializer.jsへの接続状況ガード追加（上記「恒久対策」参照）で解消済み**。
+  post_schedules.platformsに連携解除済みのプラットフォームが残っていても、
+  そのプラットフォーム分の新規生成だけが継続的にスキップされ、`not_connected`失敗が
+  繰り返されることはない

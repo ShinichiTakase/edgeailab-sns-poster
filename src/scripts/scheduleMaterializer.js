@@ -17,6 +17,7 @@ require("dotenv").config({ path: path.join(__dirname, "..", "..", ".env") });
 const scheduleStore = require("../lib/scheduleStore");
 const scheduleTextStore = require("../lib/scheduleTextStore");
 const { createScheduledPost } = require("../lib/scheduledPostStore");
+const { getConnectedEntry } = require("../lib/tokenStore");
 const { getCustomerById, isTrialPostLimitReached, isCanceled, requiresPaymentRegistration } = require("../lib/customerStore");
 const { containsUrl } = require("../lib/urlDetection");
 const {
@@ -84,6 +85,13 @@ async function main() {
 
       const slots = getConfiguredSlots(schedule).slice(0, n);
       const platforms = Array.isArray(schedule.platforms) ? schedule.platforms : [];
+      // SNS連携解除後、post_schedules.platformsに解除済みのプラットフォームが残ったままでも
+      // ここで新規生成をスキップする（連携解除時のpending予約キャンセルとは別の対応。
+      // 解除時点の既存予約は snsConnections.js の disconnect ハンドラが取り消すが、
+      // post_schedules定義自体は変更しないため、このガードが無いと翌日以降も
+      // 未接続のプラットフォーム宛てにscheduled_postsが生成され続け、実行時に
+      // not_connectedで失敗し続けることになる）。
+      const connectedEntry = getConnectedEntry(schedule.customer_code);
       let roundRobinIndex = Number(schedule.round_robin_index) || 0;
 
       for (let i = 0; i < n; i++) {
@@ -91,6 +99,8 @@ async function main() {
         const scheduledAt = pickRandomTimeInSlot(today, slots[i]);
 
         for (const platform of platforms) {
+          if (!connectedEntry[platform]) continue; // 連携解除済みのプラットフォームは生成しない
+
           const platformTextKey = {
             x: "x_text",
             threads: "threads_text",
