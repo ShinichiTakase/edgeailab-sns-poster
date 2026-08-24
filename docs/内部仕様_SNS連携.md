@@ -1,8 +1,9 @@
 # 内部仕様: SNS連携
 
-最終更新日: 2026-08-22（更新: deauthorizeコールバックの調査結果を反映）
+最終更新日: 2026-08-25（更新: 連携解除時の未実行予約投稿キャンセルを追加）
 コード参照: sns-poster/src/routes/snsConnections.js, facebook.js, instagram.js, threads.js,
-x.js, sns-poster/src/lib/tokenStore.js, sns-poster/src/middleware/snsConnectionGuard.js,
+x.js, sns-poster/src/lib/tokenStore.js, sns-poster/src/lib/scheduledPostStore.js,
+sns-poster/src/middleware/snsConnectionGuard.js,
 sns-poster/src/lib/snsConnectionModeConfig.js, sns-poster/config/snsConnectionMode.json,
 sns-poster/src/lib/planLimitsConfig.js, sns-poster/config/planLimits.json
 
@@ -44,6 +45,36 @@ sns-poster/src/lib/planLimitsConfig.js, sns-poster/config/planLimits.json
 監査ログを記録する（**この監査ログは2026-08-22に新規追加**。それまで連携解除操作には
 一切の記録が無く「本当に削除ボタンを押したのか」を事後確認できなかった、とコメントに
 明記）。
+
+**未実行予約投稿のキャンセル（2026-08-25追加）**: トークン削除に成功した直後、
+`scheduledPostStore.listPendingByCustomerAndPlatform(customerCode, platform)`で
+その顧客・そのプラットフォーム宛ての`status=pending`な`scheduled_posts`を取得し、
+`deleteScheduledPost`で1件ずつ順次削除する（microCMS書き込み429対策として本機能内の
+他箇所と同じ「1件ずつ順次処理」パターンを踏襲。アカウント解約時の
+`cancelScheduledJobsForCustomer`・スケジュール一時停止/削除時の
+`cancelPendingGeneratedPosts`と同系統だが、それらと違い「顧客×1プラットフォーム」で
+絞り込む点が異なる）。
+
+- 修正前は連携解除してもpending予約が一切キャンセルされず、トークンが無いまま
+  `scheduledPostExecutor.js`の実行時に`throw new Error("not_connected")`で失敗し、
+  再試行（最大3回）を経て最終的に`status="failed"`のまま残るだけだった（無駄な失敗
+  ログ・再試行の発生、ユーザーからは投稿一覧に失敗のまま予約が残り続けて見える）
+- 対象は「スケジュール投稿（post_schedules）由来」「ワンショット投稿の予約投稿由来」の
+  両方（`listPendingByCustomerAndPlatform`は`source_schedule_id`を条件に含めないため）
+- キャンセル処理自体が例外を投げても、連携解除（トークン削除）はロールバックしない
+  設計（`try/catch`で握りつぶしログのみ）。連携解除という主操作の成否を、副次的な
+  後始末処理の成否に引きずられさせないため
+- レスポンスに`canceledScheduledPostCount`を追加（フロント側は現状未使用。将来UIで
+  「◯件の予約投稿もキャンセルされました」と案内する際に使える）
+- **post_schedules（スケジュール設定）自体の`platforms`からの除去、およびcronによる
+  新規`scheduled_posts`生成の抑止は行っていない**（対応範囲外、要確認事項参照）。
+  そのプラットフォームを含む`post_schedules`が稼働中のままなら、翌日以降
+  `scheduleMaterializer.js`が再びそのプラットフォーム宛ての`scheduled_posts`
+  （status=pending）を生成し、実行時に同じ`not_connected`失敗を繰り返す
+- テスト: `src/routes/snsConnections.test.js`（`node --test`。tokenStore・
+  scheduledPostStoreをすべてフェイクに差し替えた統合テスト。「対象プラットフォームの
+  pendingのみキャンセルされ他プラットフォームは影響を受けない」「未連携なら404で
+  キャンセル処理自体が走らない」「閲覧者は403」等を検証）
 
 ## OAuthフロー（4プラットフォーム共通の骨格・相違点）
 
@@ -192,3 +223,13 @@ OAuth開始route専用のサーバーサイドゲート。2段階チェック:
   フォームの実際の登録済みredirect_uriに紐づく本番URLのため、修正時は要注意
 - Instagramのアカウント切り替え確認フローは実際の事故を受けて追加された唯一の例外的
   ガード。他3プラットフォームは再認証時に無確認で即座に上書きする
+- 連携解除時のpending予約キャンセル（上記）は「今ある予約」のみが対象で、
+  post_schedules定義自体は変更しない。そのプラットフォームを含むスケジュールが
+  稼働中のまま残っていると、翌日以降のmaterializerが同プラットフォーム宛ての
+  予約を再生成し、実行時に`not_connected`で失敗する状態が繰り返される（アカウント
+  解約時は`customers.status="canceled"`を`scheduleMaterializer.js`のガードで
+  検知して新規生成自体を止めているが、SNS連携解除だけでは顧客ステータスは変化しない
+  ため同じ安全策が効かない）。恒久対応するなら、`scheduleMaterializer.js`の生成前に
+  `tokenStore.getConnectedEntry`で該当プラットフォームの接続有無を確認するガードを
+  追加するか、連携解除時に該当プラットフォームを含む`post_schedules.platforms`から
+  除去する処理が必要

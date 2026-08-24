@@ -264,6 +264,35 @@ async function listPendingByCustomer(customerCode) {
   return all;
 }
 
+/** 指定顧客の、指定プラットフォーム宛てのpending予約のみを列挙する。
+ * SNS連携解除時に、その1プラットフォーム分だけを狙い撃ちで取り消すために使う
+ * （listPendingByCustomerは顧客の全プラットフォームを返してしまうため流用不可）。 */
+async function listPendingByCustomerAndPlatform(customerCode, platform) {
+  // status・platformともにmicroCMSのセレクトフィールド（配列書き込み）のため、
+  // [equals]では一致せず常に0件になる。[contains]で一致させる（listPendingScheduledPosts参照）。
+  const filters = [
+    `customer_code[equals]${encodeURIComponent(customerCode)}`,
+    `status[contains]pending`,
+    `platform[contains]${encodeURIComponent(platform)}`,
+  ].join("[and]");
+  const all = [];
+  const limit = 100;
+  let offset = 0;
+  for (;;) {
+    const res = await microcmsFetch(`/scheduled_posts?filters=${filters}&limit=${limit}&offset=${offset}`);
+    if (!res.ok) {
+      const text = await res.text().catch(() => "");
+      throw new Error(`[scheduledPostStore] listPendingByCustomerAndPlatform failed ${res.status} ${text.slice(0, 300)}`);
+    }
+    const json = await res.json();
+    const contents = Array.isArray(json.contents) ? json.contents : [];
+    all.push(...contents);
+    if (contents.length < limit) break;
+    offset += limit;
+  }
+  return all;
+}
+
 async function deleteScheduledPost(id) {
   const res = await microcmsFetch(`/scheduled_posts/${id}`, { method: "DELETE" });
   if (!res.ok && res.status !== 404) {
@@ -281,6 +310,7 @@ module.exports = {
   listFailedScheduledPosts,
   listPendingBySourceSchedule,
   listPendingByCustomer,
+  listPendingByCustomerAndPlatform,
   markScheduledPostStatus,
   deleteScheduledPost,
   getScheduledPostsSummary,
