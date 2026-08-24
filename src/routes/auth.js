@@ -31,6 +31,13 @@ const VERIFICATION_TOKEN_TTL_MS = 24 * 60 * 60 * 1000;
 // trialDisplayEndsAt（バッファを差し引いた「表向き」の終了日時）を使うこと。
 const TRIAL_DAYS = 30;
 const TRIAL_INTERNAL_BUFFER_DAYS = 3;
+// トライアル投稿上限（60通）到達時、支払い方法登録済みで自動アクティベートされた
+// 顧客に「基本料金が発生し投稿は課金されます」バナーを表示する猶予期間（2026-08-25追加）。
+// ダッシュボード側のCookie表示期間（3日）と同じ値。この期間を過ぎるとtrialLimitAutoActivated
+// は自動的にfalseへ戻る（customer.trialLimitAutoActivatedAt自体は永続的に残り続けるが、
+// 一度きりの通知イベントとして扱うため、ここでの判定を毎回のtrialLimitAutoActivatedAtとの
+// 差分計算で行うことで、Cookieが自然失効した後にバナーが際限なく再表示されるのを防いでいる）。
+const TRIAL_LIMIT_AUTO_ACTIVATED_NOTICE_WINDOW_DAYS = 3;
 const BCRYPT_ROUNDS = 12;
 const RESEND_MIN_INTERVAL_MS = 60 * 1000;
 const PASSWORD_RESET_TOKEN_TTL_MS = 60 * 60 * 1000;
@@ -83,6 +90,15 @@ function safeCustomer(customer) {
     // トライアル中の投稿上限（60通）到達フラグ。ダッシュボード等のバナー表示判定に使う
     // （customerStore.isTrialPostLimitReached参照。status!=="trial"なら常にfalse）。
     trialPostLimitReached: customerStore.isTrialPostLimitReached(customer),
+    // 投稿上限到達により自動アクティベート（status:"trial"→"active"＋即時課金）されて
+    // から3日以内かどうか（2026-08-25追加）。trueの間、ダッシュボードは
+    // status==="active"になっていても投稿上限到達バナーを表示し続ける（この時点では
+    // trialPostLimitReachedはstatusが"trial"でなくなっているため常にfalseになる）。
+    trialLimitAutoActivated: Boolean(
+      customer.trialLimitAutoActivatedAt &&
+        Date.now() - new Date(customer.trialLimitAutoActivatedAt).getTime() <
+          TRIAL_LIMIT_AUTO_ACTIVATED_NOTICE_WINDOW_DAYS * 24 * 60 * 60 * 1000
+    ),
   };
 }
 

@@ -19,6 +19,7 @@ const scheduleTextStore = require("../lib/scheduleTextStore");
 const { createScheduledPost } = require("../lib/scheduledPostStore");
 const { getConnectedEntry } = require("../lib/tokenStore");
 const { getCustomerById, isTrialPostLimitReached, isCanceled, requiresPaymentRegistration } = require("../lib/customerStore");
+const { activateAfterTrialLimitIfNeeded } = require("../lib/trialLimitAutoActivation");
 const { containsUrl } = require("../lib/urlDetection");
 const {
   matchesWeekday,
@@ -69,8 +70,20 @@ async function main() {
       }
       // トライアル投稿上限・解約は生成時点でも確認する（実行時にもscheduledPostRunner.js側で
       // 再確認するため二重チェックになるが、無駄な予約生成を避けるためここでも弾く）。
-      if (isCanceled(customer) || isTrialPostLimitReached(customer) || requiresPaymentRegistration(customer)) {
+      if (isCanceled(customer) || requiresPaymentRegistration(customer)) {
         continue;
+      }
+      if (isTrialPostLimitReached(customer)) {
+        // requireUnderTrialPostLimit（requireAuth.js）・scheduledPostExecutor.jsと
+        // 同じ救済経路（2026-08-25追加）。60通到達後にpayment.htmlでカードだけ
+        // 登録しておいた顧客が、次のmaterializer実行タイミングで自動的に本契約へ
+        // 切り替わり、当日分の予約生成が再開されるようにする。
+        const result = await activateAfterTrialLimitIfNeeded({ customer, logger: { logError } });
+        if (result === "activated") {
+          customer.status = ["active"];
+        } else {
+          continue;
+        }
       }
 
       // 承認待ち・却下・失効中のバッチ（編集者作成分）は自動生成プールから除外する

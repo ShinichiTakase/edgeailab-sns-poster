@@ -9,6 +9,7 @@ const {
   roleOf,
   TRIAL_POST_LIMIT,
 } = require("../lib/customerStore");
+const { activateAfterTrialLimitIfNeeded } = require("../lib/trialLimitAutoActivation");
 
 function parseCookieHeader(header) {
   const result = {};
@@ -88,14 +89,32 @@ function blockExpiredTrial(req, res, next) {
 // （status: trial）に限り、全SNS合計の投稿数がcustomerStore.TRIAL_POST_LIMIT
 // （60通）に達した時点で以降の投稿をブロックする。判定本体はcustomerStore.js の
 // isTrialPostLimitReached（req/resに依存しない純粋関数。cronからも同じ判定を使う）。
-function requireUnderTrialPostLimit(req, res, next) {
-  if (isTrialPostLimitReached(req.customer)) {
-    return res.status(403).json({
-      error: "trial_post_limit_reached",
-      message: `トライアル中の投稿上限（${TRIAL_POST_LIMIT}通）に達しました`,
-    });
+//
+// 2026-08-25変更: ブロックする直前に、支払い方法（Stripeカード）が登録済みなら
+// その場で自動アクティベート（trialLimitAutoActivation.js）を試みる。60通到達時点
+// では未登録だったが、その後payment.htmlでカードだけ登録しておいた顧客が「次に
+// 投稿しようとしたタイミング」で自動的に本契約へ切り替わり投稿が再開されるように
+// するための救済経路（60通到達の瞬間に登録済みだった場合の即時アクティベートは、
+// posts.js側のcrossedTrialPostLimit判定で別途行われる。こちらはその取りこぼし
+// ケースを拾うための、ブロック直前での再チェック）。
+async function requireUnderTrialPostLimit(req, res, next) {
+  if (!isTrialPostLimitReached(req.customer)) {
+    return next();
   }
-  next();
+
+  const result = await activateAfterTrialLimitIfNeeded({
+    customer: req.customer,
+    logger: { logError: (...args) => console.error(...args) },
+  });
+  if (result === "activated") {
+    req.customer.status = ["active"];
+    return next();
+  }
+
+  return res.status(403).json({
+    error: "trial_post_limit_reached",
+    message: `トライアル中の投稿上限（${TRIAL_POST_LIMIT}通）に達しました`,
+  });
 }
 
 // requireAuth・requireVerified・requireUnderTrialPostLimit と並べて組み込む

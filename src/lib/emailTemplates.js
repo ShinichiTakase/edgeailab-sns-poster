@@ -39,15 +39,24 @@ const TRIAL_ENDING_EMAIL = {
 
 const TRIAL_POST_LIMIT_WARNING_EMAIL = {
   subject: "【EdgeAI Lab】無料トライアルの投稿数が上限に近づいています",
-  body: (postCount, postLimit, upgradeUrl, plan) =>
+  // hasPaymentMethod: お支払い方法（Stripeカード）を登録済みかどうかで、上限到達時の
+  // 案内内容を出し分ける（2026-08-25変更。上限（60通）到達時、未登録なら投稿停止・
+  // 登録済みなら登録済みカードへ自動的に課金が開始される仕様のため）。
+  body: (postCount, postLimit, paymentUrl, plan, hasPaymentMethod) =>
     [
       `無料トライアル期間中の投稿数が、上限（${postLimit}通）の80%（${postCount}通）に達しました。`,
       `選択プラン: ${planLabel(plan)}`,
       "",
-      `上限の${postLimit}通に達すると、それ以降の投稿ができなくなります。`,
-      "トライアル期間中も引き続き投稿をご利用いただくには、お支払い情報のご登録が必要です。",
-      "以下のリンクからお手続きください。",
-      upgradeUrl,
+      ...(hasPaymentMethod
+        ? [
+            `上限の${postLimit}通に達すると、登録済みのお支払い方法（クレジットカード）へ自動的に基本料金のご請求が開始され、引き続き投稿をご利用いただけます。`,
+          ]
+        : [
+            `上限の${postLimit}通に達すると、それ以降の投稿ができなくなります。`,
+            "トライアル期間中も引き続き投稿をご利用いただくには、お支払い情報のご登録が必要です。",
+            "以下のリンクからお手続きください。",
+            paymentUrl,
+          ]),
       "",
       "ご不明な点がございましたら、サポートまでお問い合わせください。",
     ].join("\n"),

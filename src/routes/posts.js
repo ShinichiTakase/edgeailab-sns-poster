@@ -23,8 +23,15 @@ const retryStore = require("../lib/scheduledPostRetryStore");
 const postingLogOriginStore = require("../lib/postingLogOriginStore");
 const approvalStore = require("../lib/approvalStore");
 const { parseMonthParam, isPastMonth } = require("../lib/monthParam");
-const { bumpTrialPostCount, getTrialPostCount, crossedTrialPostLimitWarning, roleOf } = require("../lib/customerStore");
+const {
+  bumpTrialPostCount,
+  getTrialPostCount,
+  crossedTrialPostLimitWarning,
+  crossedTrialPostLimit,
+  roleOf,
+} = require("../lib/customerStore");
 const { sendTrialPostLimitWarningIfNeeded } = require("../lib/trialPostLimitWarningMailer");
+const { activateAfterTrialLimitIfNeeded } = require("../lib/trialLimitAutoActivation");
 const { containsUrl, extractFirstUrl } = require("../lib/urlDetection");
 const xPoster = require("../lib/xPoster");
 const facebookPoster = require("../lib/facebookPoster");
@@ -249,6 +256,16 @@ router.post(
             logger: { logError: (...args) => console.error(...args) },
           });
         }
+        // 投稿上限（60通）そのものを今回の加算で初めて跨いだ場合、支払い方法登録済み
+        // なら即時本稼働へ切り替え・課金開始する（trialLimitAutoActivation.js参照。
+        // 未登録の場合は何もせず、requireUnderTrialPostLimitによる次回以降のブロックが
+        // そのまま効く）。
+        if (crossedTrialPostLimit(req.customer, before, after)) {
+          await activateAfterTrialLimitIfNeeded({
+            customer: { ...req.customer, trialPostCount: after },
+            logger: { logError: (...args) => console.error(...args) },
+          });
+        }
       } catch (err) {
         console.error(`[posts] trial post count update failed customerId=${customerId}:`, err);
       }
@@ -347,6 +364,12 @@ router.post(
         const after = await bumpTrialPostCount(customerId, req.customer, successCount);
         if (crossedTrialPostLimitWarning(req.customer, before, after)) {
           await sendTrialPostLimitWarningIfNeeded({
+            customer: { ...req.customer, trialPostCount: after },
+            logger: { logError: (...args) => console.error(...args) },
+          });
+        }
+        if (crossedTrialPostLimit(req.customer, before, after)) {
+          await activateAfterTrialLimitIfNeeded({
             customer: { ...req.customer, trialPostCount: after },
             logger: { logError: (...args) => console.error(...args) },
           });

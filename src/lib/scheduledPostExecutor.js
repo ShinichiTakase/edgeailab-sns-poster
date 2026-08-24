@@ -13,12 +13,14 @@ const {
   bumpTrialPostCount,
   getTrialPostCount,
   crossedTrialPostLimitWarning,
+  crossedTrialPostLimit,
 } = require("./customerStore");
 const { reportMeterEvent } = require("./meterEvents");
 const { containsUrl, extractFirstUrl } = require("./urlDetection");
 const scheduleStore = require("./scheduleStore");
 const { sendScheduleResultEmail } = require("./scheduleResultMailer");
 const { sendTrialPostLimitWarningIfNeeded } = require("./trialPostLimitWarningMailer");
+const { activateAfterTrialLimitIfNeeded } = require("./trialLimitAutoActivation");
 const xPoster = require("./xPoster");
 const facebookPoster = require("./facebookPoster");
 const instagramPoster = require("./instagramPoster");
@@ -83,7 +85,17 @@ async function attemptScheduledPost(post, customerCache, logger) {
   // ワンショット投稿（posts.js）と同じガード。cronはHTTPリクエストの文脈を持たないため、
   // requireAuth.jsのミドルウェアではなくcustomerStore.jsの純粋関数を直接呼ぶ。
   if (isCanceled(customer)) throw new Error("account_canceled");
-  if (isTrialPostLimitReached(customer)) throw new Error("trial_post_limit_reached");
+  if (isTrialPostLimitReached(customer)) {
+    // requireUnderTrialPostLimit（requireAuth.js）と同じ救済経路（2026-08-25追加）。
+    // 60通到達後にpayment.htmlでカードだけ登録しておいた顧客が、次にこのcronが
+    // 実行されたタイミングで自動的に本契約へ切り替わり投稿が再開されるようにする。
+    const result = await activateAfterTrialLimitIfNeeded({ customer, logger });
+    if (result === "activated") {
+      customer.status = ["active"];
+    } else {
+      throw new Error("trial_post_limit_reached");
+    }
+  }
 
   const tokenEntry = (loadStore()[customerCode] || {})[platform];
   if (!tokenEntry) throw new Error("not_connected");
@@ -124,6 +136,16 @@ async function attemptScheduledPost(post, customerCache, logger) {
       // 投稿にも適用。trialPostLimitWarningMailer.js参照）。
       if (crossedTrialPostLimitWarning(customer, beforeCount, nextCount)) {
         await sendTrialPostLimitWarningIfNeeded({ customer, logger });
+      }
+      // 投稿上限（60通）そのものを今回の加算で初めて跨いだ場合、支払い方法登録済み
+      // なら即時本稼働へ切り替え・課金開始する（trialLimitAutoActivation.js参照）。
+      if (crossedTrialPostLimit(customer, beforeCount, nextCount)) {
+        const result = await activateAfterTrialLimitIfNeeded({ customer, logger });
+        // customerCacheの使い回しと同じ理由で、activated時はin-memoryのcustomer.status
+        // も更新しておく（同一cron実行内の後続処理がstatus:"trial"のまま誤判定しないため）。
+        if (result === "activated") {
+          customer.status = ["active"];
+        }
       }
     } catch (countErr) {
       logger.logError(`[scheduledPostExecutor] trial post count update failed id=${post.id}:`, countErr);

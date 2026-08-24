@@ -4,6 +4,12 @@
 // で「今回の加算で初めて80%を跨いだか」を判定してから、trueの場合のみここを呼ぶ想定
 // （scheduleResultMailer.jsと同じ「呼び出し元でtry/catchし、送信失敗を投稿処理自体の
 // 成否に影響させない」方針）。
+//
+// 2026-08-25変更: 支払い方法登録済みでも送信自体はスキップしない（以前は登録済みなら
+// 送らない設計だった）。60通到達時、未登録なら投稿停止・登録済みなら登録済みカードへ
+// 自動課金という仕様になったため（trialLimitAutoActivation.js参照）、このメールも
+// 「あと少しで上限です。登録済みの方は自動課金されます／未登録の方は投稿が止まります」
+// という案内を、登録状況に応じて出し分けて必ず送る。
 const { getStripe } = require("./stripeClient");
 const { sendCustomerMail } = require("./customerMailer");
 const { TRIAL_POST_LIMIT_WARNING_EMAIL } = require("./emailTemplates");
@@ -29,10 +35,16 @@ async function customerHasPaymentMethod(stripeCustomerId) {
  */
 async function sendTrialPostLimitWarningIfNeeded({ customer, logger }) {
   try {
-    if (await customerHasPaymentMethod(customer.stripeCustomerId)) return false;
+    const hasPaymentMethod = await customerHasPaymentMethod(customer.stripeCustomerId);
 
+    // 未登録の場合のみpayment.htmlへの登録導線を案内する（登録済みの場合は
+    // 「自動課金される」旨のみで、リンクは不要）。トライアル中にpayment.html経由で
+    // カードだけ先に登録しておけば、実際に60通へ到達した瞬間
+    // trialLimitAutoActivation.jsが自動でサブスクリプションを作成し即時課金する
+    // ため、このリンク先はpayment.htmlで正しい（upgrade.html等の手動Checkoutを
+    // 経由する必要はない）。
     const base = process.env.APP_BASE_URL || "https://edgeailab.net";
-    const upgradeUrl = `${base}/upgrade.html`;
+    const paymentUrl = `${base}/payment.html`;
     const planValue = Array.isArray(customer.plan) ? customer.plan[0] : customer.plan;
     const planForLabel = typeof planValue === "string" ? planValue.toLowerCase() : planValue;
 
@@ -42,8 +54,9 @@ async function sendTrialPostLimitWarningIfNeeded({ customer, logger }) {
       text: TRIAL_POST_LIMIT_WARNING_EMAIL.body(
         Number(customer.trialPostCount) || 0,
         TRIAL_POST_LIMIT,
-        upgradeUrl,
-        planForLabel
+        paymentUrl,
+        planForLabel,
+        hasPaymentMethod
       ),
     });
     return Boolean(result && result.ok);

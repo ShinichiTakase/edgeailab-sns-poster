@@ -415,6 +415,7 @@ async function reactivateCustomer(id, {
     trialReminderSent: false,
     trialReminder5DaySent: false,
     trialReminder2DaySent: false,
+    trialLimitAutoActivatedAt: "",
     stripeSubscriptionId: "",
     users: [
       {
@@ -521,6 +522,17 @@ function crossedTrialPostLimitWarning(customer, beforeCount, afterCount) {
   return beforeCount < TRIAL_POST_LIMIT_WARNING_COUNT && afterCount >= TRIAL_POST_LIMIT_WARNING_COUNT;
 }
 
+// crossedTrialPostLimitWarningと同じ考え方で、今回の加算で上限（60通）ラインを
+// 「初めて」跨いだかどうかを判定する純粋関数（2026-08-25追加）。trueの場合、
+// trialLimitAutoActivation.jsで「支払い方法登録済みなら即時本稼働へ切り替え・
+// 未登録ならそのままブロック」を判定する（呼び出し元はcrossedTrialPostLimitWarning
+// と同じ3箇所: posts.js×2・scheduledPostExecutor.js）。
+function crossedTrialPostLimit(customer, beforeCount, afterCount) {
+  const status = Array.isArray(customer.status) ? customer.status[0] : customer.status;
+  if (status !== "trial") return false;
+  return beforeCount < TRIAL_POST_LIMIT && afterCount >= TRIAL_POST_LIMIT;
+}
+
 // requireAuth.js の blockCanceledCustomer と、cron（スケジュール投稿の実行）の
 // 両方から使う純粋関数。
 function isCanceled(customer) {
@@ -596,6 +608,7 @@ module.exports = {
   getTrialPostCount,
   isTrialPostLimitReached,
   crossedTrialPostLimitWarning,
+  crossedTrialPostLimit,
   isCanceled,
   bumpTrialPostCount,
   listCustomersForTrialReminder,
