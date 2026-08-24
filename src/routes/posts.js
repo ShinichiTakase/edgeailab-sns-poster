@@ -23,7 +23,8 @@ const retryStore = require("../lib/scheduledPostRetryStore");
 const postingLogOriginStore = require("../lib/postingLogOriginStore");
 const approvalStore = require("../lib/approvalStore");
 const { parseMonthParam, isPastMonth } = require("../lib/monthParam");
-const { bumpTrialPostCount, roleOf } = require("../lib/customerStore");
+const { bumpTrialPostCount, getTrialPostCount, crossedTrialPostLimitWarning, roleOf } = require("../lib/customerStore");
+const { sendTrialPostLimitWarningIfNeeded } = require("../lib/trialPostLimitWarningMailer");
 const { containsUrl, extractFirstUrl } = require("../lib/urlDetection");
 const xPoster = require("../lib/xPoster");
 const facebookPoster = require("../lib/facebookPoster");
@@ -237,7 +238,17 @@ router.post(
     // トライアル投稿数の加算はループ終了後に一度だけ行う（customerStore.bumpTrialPostCount参照）。
     if (successCount > 0) {
       try {
-        await bumpTrialPostCount(customerId, req.customer, successCount);
+        const before = getTrialPostCount(req.customer);
+        const after = await bumpTrialPostCount(customerId, req.customer, successCount);
+        // 投稿上限（60通）の80%到達を今回の加算で初めて跨いだ場合のみ即時メール送信
+        // （trialPostLimitWarningMailer.js参照。送信失敗・支払い方法登録済みでの
+        // スキップは投稿処理自体の成否に影響させない）。
+        if (crossedTrialPostLimitWarning(req.customer, before, after)) {
+          await sendTrialPostLimitWarningIfNeeded({
+            customer: { ...req.customer, trialPostCount: after },
+            logger: { logError: (...args) => console.error(...args) },
+          });
+        }
       } catch (err) {
         console.error(`[posts] trial post count update failed customerId=${customerId}:`, err);
       }
@@ -332,7 +343,14 @@ router.post(
 
     if (successCount > 0) {
       try {
-        await bumpTrialPostCount(customerId, req.customer, successCount);
+        const before = getTrialPostCount(req.customer);
+        const after = await bumpTrialPostCount(customerId, req.customer, successCount);
+        if (crossedTrialPostLimitWarning(req.customer, before, after)) {
+          await sendTrialPostLimitWarningIfNeeded({
+            customer: { ...req.customer, trialPostCount: after },
+            logger: { logError: (...args) => console.error(...args) },
+          });
+        }
       } catch (err) {
         console.error(`[posts/schedule] trial post count update failed customerId=${customerId}:`, err);
       }

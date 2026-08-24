@@ -413,6 +413,8 @@ async function reactivateCustomer(id, {
     trialEndsAt: "",
     trialPostCount: 0,
     trialReminderSent: false,
+    trialReminder5DaySent: false,
+    trialReminder2DaySent: false,
     stripeSubscriptionId: "",
     users: [
       {
@@ -500,6 +502,25 @@ function isTrialPostLimitReached(customer) {
   return status === "trial" && getTrialPostCount(customer) >= TRIAL_POST_LIMIT;
 }
 
+// トライアル投稿上限の80%到達時に即時メール送信するための閾値（2026-08-25追加）。
+// Math.ceilで切り上げ（60*0.8=48ちょうどだが、上限値が将来変わっても整数になるように）。
+const TRIAL_POST_LIMIT_WARNING_RATIO = 0.8;
+const TRIAL_POST_LIMIT_WARNING_COUNT = Math.ceil(TRIAL_POST_LIMIT * TRIAL_POST_LIMIT_WARNING_RATIO);
+
+// bumpTrialPostCount呼び出し前後のtrialPostCountから、今回の加算で警告ライン
+// （80%）を「初めて」跨いだかどうかを判定する純粋関数。trialPostCountは同一トライアル
+// 期間中は増加し続ける一方（減ることはない）ため、この判定だけで「1トライアル期間中に
+// 一度だけ」を保証でき、専用の送信済みフラグを別途永続化する必要がない
+// （新規トライアル開始時はtrialPostCountが0にリセットされるため、次のトライアルでも
+// 正しく再度跨ぎ判定される）。呼び出し元（posts.js・scheduledPostExecutor.js）が
+// bumpTrialPostCountの前後でこれを呼び、trueならtrialPostLimitWarningMailer.jsで
+// 即時メール送信する。
+function crossedTrialPostLimitWarning(customer, beforeCount, afterCount) {
+  const status = Array.isArray(customer.status) ? customer.status[0] : customer.status;
+  if (status !== "trial") return false;
+  return beforeCount < TRIAL_POST_LIMIT_WARNING_COUNT && afterCount >= TRIAL_POST_LIMIT_WARNING_COUNT;
+}
+
 // requireAuth.js の blockCanceledCustomer と、cron（スケジュール投稿の実行）の
 // 両方から使う純粋関数。
 function isCanceled(customer) {
@@ -518,22 +539,38 @@ async function bumpTrialPostCount(customerId, currentCustomer, delta) {
   return next;
 }
 
+// customers.trialEndsAtは「表向き」の日数より3日長い内部バッファ込みの値
+// （routes/auth.jsのTRIAL_INTERNAL_BUFFER_DAYS参照。同じ値をここでも独立して
+// 定義している。どちらかを変更する際はもう一方も見直すこと）。
+const TRIAL_INTERNAL_BUFFER_DAYS = 3;
+
 /**
- * トライアル終了が迫っていてリマインド未送信の顧客一覧を取得する。
- * @param {number} withinDays 残り何日以内を対象にするか
+ * トライアル終了（表向きの終了日＝trialDisplayEndsAt基準）が指定日数以内に迫っていて、
+ * 該当ウィンドウのリマインドがまだ未送信の顧客一覧を取得する。
+ * @param {number} displayDaysBeforeEnd 表向きの残り日数がこの日数以下になったら対象（例: 5, 2）
+ * @param {string} sentField このウィンドウの送信済みフラグのフィールド名
+ *   （例: "trialReminder5DaySent"）
  */
-async function listCustomersWithUpcomingTrialEnd(withinDays) {
-  const cutoff = new Date(Date.now() + withinDays * 24 * 60 * 60 * 1000).toISOString();
+async function listCustomersForTrialReminder(displayDaysBeforeEnd, sentField) {
+  // trialDisplayEndsAt = trialEndsAt - TRIAL_INTERNAL_BUFFER_DAYS。
+  // 「表向きの残り日数 <= displayDaysBeforeEnd」を、格納されている生のtrialEndsAtに
+  // 対するフィルタに変換すると、cutoff = now + (displayDaysBeforeEnd + BUFFER)日 になる。
+  const cutoff = new Date(
+    Date.now() + (displayDaysBeforeEnd + TRIAL_INTERNAL_BUFFER_DAYS) * 24 * 60 * 60 * 1000
+  ).toISOString();
   const filters = [
     "isVerified[equals]true",
-    "trialReminderSent[equals]false",
+    // statusはmicroCMSのセレクトフィールド（配列書き込み）のため[contains]で一致させる
+    // （listPendingScheduledPosts等と同じ注意点）。
+    "status[contains]trial",
+    `${sentField}[equals]false`,
     `trialEndsAt[less_than]${cutoff}`,
   ].join("[and]");
   const res = await microcmsFetch(`/customers?filters=${encodeURIComponent(filters)}&limit=100`);
   if (!res.ok) {
     const text = await res.text().catch(() => "");
     throw new Error(
-      `[customerStore] listCustomersWithUpcomingTrialEnd failed ${res.status} ${text.slice(0, 300)}`
+      `[customerStore] listCustomersForTrialReminder failed ${res.status} ${text.slice(0, 300)}`
     );
   }
   const json = await res.json();
@@ -554,11 +591,14 @@ module.exports = {
   changePassword,
   requiresPaymentRegistration,
   TRIAL_POST_LIMIT,
+  TRIAL_POST_LIMIT_WARNING_RATIO,
+  TRIAL_POST_LIMIT_WARNING_COUNT,
   getTrialPostCount,
   isTrialPostLimitReached,
+  crossedTrialPostLimitWarning,
   isCanceled,
   bumpTrialPostCount,
-  listCustomersWithUpcomingTrialEnd,
+  listCustomersForTrialReminder,
   listAllCustomers,
   findCustomerAndUserByEmail,
   findCustomerAndUserByInvitationToken,

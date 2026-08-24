@@ -37,6 +37,22 @@ const TRIAL_ENDING_EMAIL = {
     ].join("\n"),
 };
 
+const TRIAL_POST_LIMIT_WARNING_EMAIL = {
+  subject: "【EdgeAI Lab】無料トライアルの投稿数が上限に近づいています",
+  body: (postCount, postLimit, upgradeUrl, plan) =>
+    [
+      `無料トライアル期間中の投稿数が、上限（${postLimit}通）の80%（${postCount}通）に達しました。`,
+      `選択プラン: ${planLabel(plan)}`,
+      "",
+      `上限の${postLimit}通に達すると、それ以降の投稿ができなくなります。`,
+      "トライアル期間中も引き続き投稿をご利用いただくには、お支払い情報のご登録が必要です。",
+      "以下のリンクからお手続きください。",
+      upgradeUrl,
+      "",
+      "ご不明な点がございましたら、サポートまでお問い合わせください。",
+    ].join("\n"),
+};
+
 const BACKUP_CARD_CHARGED_EMAIL = {
   subject: "【EdgeAI Lab】お支払い（バックアップカード利用）のお知らせ",
   body: (invoiceUrl) =>
@@ -129,6 +145,7 @@ const PASSWORD_RESET_EMAIL = {
 module.exports = {
   VERIFICATION_EMAIL,
   TRIAL_ENDING_EMAIL,
+  TRIAL_POST_LIMIT_WARNING_EMAIL,
   BACKUP_CARD_CHARGED_EMAIL,
   INVITATION_EMAIL,
   APPROVAL_REQUEST_EMAIL,

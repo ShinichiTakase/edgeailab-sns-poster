@@ -6,11 +6,19 @@ const { markScheduledPostStatus, PLATFORM_LABELS } = require("./scheduledPostSto
 const { createPostingLog } = require("./postingLogStore");
 const postingLogOriginStore = require("./postingLogOriginStore");
 const { loadStore, accountNameFor } = require("./tokenStore");
-const { getCustomerById, isTrialPostLimitReached, isCanceled, bumpTrialPostCount } = require("./customerStore");
+const {
+  getCustomerById,
+  isTrialPostLimitReached,
+  isCanceled,
+  bumpTrialPostCount,
+  getTrialPostCount,
+  crossedTrialPostLimitWarning,
+} = require("./customerStore");
 const { reportMeterEvent } = require("./meterEvents");
 const { containsUrl, extractFirstUrl } = require("./urlDetection");
 const scheduleStore = require("./scheduleStore");
 const { sendScheduleResultEmail } = require("./scheduleResultMailer");
+const { sendTrialPostLimitWarningIfNeeded } = require("./trialPostLimitWarningMailer");
 const xPoster = require("./xPoster");
 const facebookPoster = require("./facebookPoster");
 const instagramPoster = require("./instagramPoster");
@@ -105,11 +113,18 @@ async function attemptScheduledPost(post, customerCache, logger) {
     // isTrialPostLimitReached()が機能しないままトライアル顧客が無制限に投稿できて
     // しまう不具合があった（実機で確認: shin.takase@icloud.com、2026-08-25）。
     try {
+      const beforeCount = getTrialPostCount(customer);
       const nextCount = await bumpTrialPostCount(customerCode, customer, 1);
       // customerCacheは呼び出し元（scheduledPostRunner.js等）が同一cron実行内で使い回すため、
       // ここで更新しておかないと同一顧客の後続投稿が古いtrialPostCountのまま
       // isTrialPostLimitReached判定を通ってしまう（同一バッチ内での二重カウント漏れ防止）。
       customer.trialPostCount = nextCount;
+      // 投稿上限（60通）の80%到達を今回の加算で初めて跨いだ場合のみ即時メール送信
+      // （posts.jsの即時投稿・ワンショット予約投稿と同じロジックを継続スケジュール
+      // 投稿にも適用。trialPostLimitWarningMailer.js参照）。
+      if (crossedTrialPostLimitWarning(customer, beforeCount, nextCount)) {
+        await sendTrialPostLimitWarningIfNeeded({ customer, logger });
+      }
     } catch (countErr) {
       logger.logError(`[scheduledPostExecutor] trial post count update failed id=${post.id}:`, countErr);
     }
