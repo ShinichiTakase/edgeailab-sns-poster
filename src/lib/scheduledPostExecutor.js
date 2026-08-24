@@ -6,7 +6,7 @@ const { markScheduledPostStatus, PLATFORM_LABELS } = require("./scheduledPostSto
 const { createPostingLog } = require("./postingLogStore");
 const postingLogOriginStore = require("./postingLogOriginStore");
 const { loadStore, accountNameFor } = require("./tokenStore");
-const { getCustomerById, isTrialPostLimitReached, isCanceled } = require("./customerStore");
+const { getCustomerById, isTrialPostLimitReached, isCanceled, bumpTrialPostCount } = require("./customerStore");
 const { reportMeterEvent } = require("./meterEvents");
 const { containsUrl, extractFirstUrl } = require("./urlDetection");
 const scheduleStore = require("./scheduleStore");
@@ -95,6 +95,25 @@ async function attemptScheduledPost(post, customerCache, logger) {
   // スケジュール投稿（post_schedules）由来の予約のみ対象。ワンショット投稿ウィザードからの
   // 直接予約はsource_schedule_idが空のため対象外（notify_emailはpost_schedules側の設定のため）。
   if (post.source_schedule_id) {
+    // トライアル投稿数のカウント（2026-08-25追加）。ワンショット投稿（posts.js）は
+    // POST /api/posts/schedule の作成時点で既にbumpTrialPostCount済みのため、ここで
+    // 二重加算しないようsource_schedule_idがある（＝継続スケジュール由来の）投稿のみを
+    // 対象にする。継続スケジュールは予約作成時点（scheduleMaterializer.js）では
+    // カウントできず（何通生成されるかは曜日・時間帯設定に依存し予約作成＝投稿確定
+    // ではないため）、実行成功時にカウントする以外に方法が無い。
+    // これが無いと、post_schedules経由の投稿がtrialPostCountに一切反映されず、
+    // isTrialPostLimitReached()が機能しないままトライアル顧客が無制限に投稿できて
+    // しまう不具合があった（実機で確認: shin.takase@icloud.com、2026-08-25）。
+    try {
+      const nextCount = await bumpTrialPostCount(customerCode, customer, 1);
+      // customerCacheは呼び出し元（scheduledPostRunner.js等）が同一cron実行内で使い回すため、
+      // ここで更新しておかないと同一顧客の後続投稿が古いtrialPostCountのまま
+      // isTrialPostLimitReached判定を通ってしまう（同一バッチ内での二重カウント漏れ防止）。
+      customer.trialPostCount = nextCount;
+    } catch (countErr) {
+      logger.logError(`[scheduledPostExecutor] trial post count update failed id=${post.id}:`, countErr);
+    }
+
     try {
       const schedule = await scheduleStore.getScheduleById(post.source_schedule_id);
       await sendScheduleResultEmail({ schedule, customer, post, platform, success: true, logger });

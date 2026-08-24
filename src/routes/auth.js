@@ -80,6 +80,9 @@ function safeCustomer(customer) {
       : null,
     status: Array.isArray(customer.status) ? customer.status[0] || null : customer.status || null,
     coins: Number(customer.coins) || 0,
+    // トライアル中の投稿上限（60通）到達フラグ。ダッシュボード等のバナー表示判定に使う
+    // （customerStore.isTrialPostLimitReached参照。status!=="trial"なら常にfalse）。
+    trialPostLimitReached: customerStore.isTrialPostLimitReached(customer),
   };
 }
 
