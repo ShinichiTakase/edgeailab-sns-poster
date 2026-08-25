@@ -58,15 +58,38 @@ Checkoutの`trial_end`設定は、この33日基準のtrialEndsAtをそのまま
 
 ## トライアル終了リマインドメール（cron）
 `sns-poster-trial-reminder-check`（[src/scripts/trialReminderCheck.js](src/scripts/trialReminderCheck.js)）も同様に
-`profiles: manual`サービス。トライアル終了が残り3日以内（`REMINDER_WINDOW_DAYS`）かつ
-`customers.trialReminderSent`が未送信の顧客にリマインドメールを送信する（1顧客1回のみ）。
-実際のcrontab登録は`/etc/cron.d/edgeailab-net-trial-reminder-check`に日次（毎日5時）で
-実施済み（2026-08-22追加。それ以前はdocker-composeサービス定義自体が存在せず、
-本番で一度も実行されていなかった）。登録例：
+`profiles: manual`サービス。トライアル終了（表向きの残り日数基準）の**5日前・2日前**に
+それぞれ1回ずつ、支払い方法未登録の顧客にのみリマインドメールを送信する
+（`trialReminder5DaySent`・`trialReminder2DaySent`。2026-08-25改修。支払い方法登録済みの
+場合はStripeへ実問い合わせした上で送信しない）。実際のcrontab登録は
+`/etc/cron.d/edgeailab-net-trial-reminder-check`に日次（毎日**9時**、2026-08-25に5時から
+変更）で実施済み。登録例：
 
 ```
-0 5 * * * cd /opt/project/deploy/xserver-vps && docker compose run --rm sns-poster-trial-reminder-check
+0 9 * * * cd /opt/project/deploy/xserver-vps && docker compose run --rm sns-poster-trial-reminder-check
 ```
+
+詳細は[docs/内部仕様_無料で始める（トライアル）.md](docs/内部仕様_無料で始める（トライアル）.md)参照。
+
+## 顧客向けメールの共通署名（2026-08-25追加）
+`src/lib/customerMailer.js`の`sendCustomerMail`（認証・招待・トライアル関連・請求関連・
+承認関連・スケジュール投稿結果等、顧客向けメールの唯一の送信経路）は、本文の末尾に
+下記の署名を自動的に付与する。各メールテンプレート（`src/lib/emailTemplates.js`）側は
+署名を含めず、本文のみを書けばよい。
+
+```
+--------------------------------------------------
+ EdgeAI Lab - sns-posterチーム
+
+   〒220-0072
+   横浜市西区浅間町1丁目4番3号 ウィザードビル402
+   URL https://edgeailab.net/
+   Email：info@edgeailab.net
+--------------------------------------------------
+```
+
+`src/lib/mailer.js`（`notifyFailure`、社内運用向けの障害通知専用・別経路）には
+付与していない。
 
 ## Instagram Reels投稿の削除不可
 Instagram Graph APIは公開済みメディアの削除エンドポイントを提供していない
