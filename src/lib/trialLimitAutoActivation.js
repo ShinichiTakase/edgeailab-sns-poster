@@ -10,8 +10,10 @@
 // ブロックがそのまま効き、投稿は停止したままになる）。
 const { getStripe, ensureStripeCustomer } = require("./stripeClient");
 const { pricesForPlan, planKey } = require("./stripePricing");
-const { updateCustomer } = require("./customerStore");
+const { updateCustomer, TRIAL_POST_LIMIT } = require("./customerStore");
 const { customerHasPaymentMethod } = require("./trialPostLimitWarningMailer");
+const { sendCustomerMail } = require("./customerMailer");
+const { TRIAL_POST_LIMIT_REACHED_EMAIL } = require("./emailTemplates");
 
 /**
  * @param {object} params
@@ -73,4 +75,36 @@ async function activateAfterTrialLimitIfNeeded({ customer, logger }) {
   }
 }
 
-module.exports = { activateAfterTrialLimitIfNeeded };
+/**
+ * 投稿上限（60通）到達を通知するメールを送る（2026-08-25追加）。
+ * activateAfterTrialLimitIfNeededの結果（"activated"|"no_payment_method"|"failed"）に
+ * 応じて件名・本文を出し分ける。"failed"（カード自体はあるが決済失敗等）の場合は
+ * 状態が中途半端なため、誤った案内をしないよう送信しない。
+ * @param {object} params
+ * @param {object} params.customer
+ * @param {"activated"|"no_payment_method"|"failed"} params.result
+ * @param {{logError: Function}} [params.logger]
+ * @returns {Promise<boolean>}
+ */
+async function sendTrialPostLimitReachedEmailIfNeeded({ customer, result, logger }) {
+  if (result !== "activated" && result !== "no_payment_method") return false;
+  try {
+    const activated = result === "activated";
+    const base = process.env.APP_BASE_URL || "https://edgeailab.net";
+    const paymentUrl = `${base}/payment.html`;
+    const planValue = Array.isArray(customer.plan) ? customer.plan[0] : customer.plan;
+    const planForLabel = typeof planValue === "string" ? planValue.toLowerCase() : planValue;
+
+    const mailResult = await sendCustomerMail({
+      toEmail: customer.email,
+      subject: TRIAL_POST_LIMIT_REACHED_EMAIL.subject(activated),
+      text: TRIAL_POST_LIMIT_REACHED_EMAIL.body(TRIAL_POST_LIMIT, paymentUrl, planForLabel, activated),
+    });
+    return Boolean(mailResult && mailResult.ok);
+  } catch (err) {
+    if (logger) logger.logError(`[trialLimitAutoActivation] reached email failed customerId=${customer.id}:`, err);
+    return false;
+  }
+}
+
+module.exports = { activateAfterTrialLimitIfNeeded, sendTrialPostLimitReachedEmailIfNeeded };

@@ -16,6 +16,7 @@ const customerStore = require("./customerStore");
 const meterEvents = require("./meterEvents");
 const scheduleStore = require("./scheduleStore");
 const scheduleResultMailer = require("./scheduleResultMailer");
+const trialLimitAutoActivation = require("./trialLimitAutoActivation");
 const xPoster = require("./xPoster");
 
 scheduledPostStore.markScheduledPostStatus = async () => {};
@@ -27,6 +28,13 @@ meterEvents.reportMeterEvent = async () => {};
 scheduleStore.getScheduleById = async () => ({ id: "sched_1", notify_email: false });
 scheduleResultMailer.sendScheduleResultEmail = async () => true;
 xPoster.postTextWithLinkImage = async () => ({ id: "post_x_1" });
+// このテストファイルは trialPostCount の加算そのものが対象で、60通ラインを跨いだ際の
+// 自動アクティベート・通知メール送信（trialLimitAutoActivation.js、実Stripe/実SMTP
+// 呼び出しを含む）は別ファイル（trialLimitAutoActivation.test.js等）で検証済みのため、
+// ここでは常にno-opにしてノーガードで実アクセスが走らないようにする（58→59→60と
+// 跨ぐテストケースがあるため必須）。
+trialLimitAutoActivation.activateAfterTrialLimitIfNeeded = async () => "no_payment_method";
+trialLimitAutoActivation.sendTrialPostLimitReachedEmailIfNeeded = async () => false;
 
 let currentCustomer = null;
 let bumpCalls = [];

@@ -10,6 +10,7 @@ const assert = require("node:assert/strict");
 const stripeClient = require("./stripeClient");
 const stripePricing = require("./stripePricing");
 const customerStore = require("./customerStore");
+const customerMailer = require("./customerMailer");
 
 let fakeCards = [];
 let createdSubscriptions = [];
@@ -47,12 +48,19 @@ customerStore.updateCustomer = async (id, patch) => {
   updatedCustomers.push({ id, patch });
 };
 
-const { activateAfterTrialLimitIfNeeded } = require("./trialLimitAutoActivation");
+let sentMails = [];
+customerMailer.sendCustomerMail = async ({ toEmail, subject, text }) => {
+  sentMails.push({ toEmail, subject, text });
+  return { ok: true };
+};
+
+const { activateAfterTrialLimitIfNeeded, sendTrialPostLimitReachedEmailIfNeeded } = require("./trialLimitAutoActivation");
 
 test.beforeEach(() => {
   fakeCards = [];
   createdSubscriptions = [];
   updatedCustomers = [];
+  sentMails = [];
   subscriptionStatusToReturn = "active";
   subscriptionCreateShouldThrow = false;
 });
@@ -110,4 +118,34 @@ test("Stripe呼び出し自体が例外を投げた場合もfailedを返し、�
 
   assert.equal(result, "failed");
   assert.equal(updatedCustomers.length, 0);
+});
+
+test("sendTrialPostLimitReachedEmailIfNeeded: activated時は「本契約へ切り替わりました」の文面で送る", async () => {
+  const customer = { id: "cust_1", email: "a@example.com", plan: ["Standard"] };
+  const sent = await sendTrialPostLimitReachedEmailIfNeeded({ customer, result: "activated", logger: fakeLogger() });
+
+  assert.equal(sent, true);
+  assert.equal(sentMails.length, 1);
+  assert.equal(sentMails[0].toEmail, "a@example.com");
+  assert.match(sentMails[0].subject, /本契約へ切り替わりました/);
+  assert.match(sentMails[0].text, /自動的に切り替わりました/);
+  assert.doesNotMatch(sentMails[0].text, /payment\.html/);
+});
+
+test("sendTrialPostLimitReachedEmailIfNeeded: no_payment_method時は投稿停止・登録案内の文面で送る", async () => {
+  const customer = { id: "cust_1", email: "a@example.com", plan: ["Standard"] };
+  const sent = await sendTrialPostLimitReachedEmailIfNeeded({ customer, result: "no_payment_method", logger: fakeLogger() });
+
+  assert.equal(sent, true);
+  assert.equal(sentMails.length, 1);
+  assert.match(sentMails[0].text, /これ以降の投稿はできません/);
+  assert.match(sentMails[0].text, /payment\.html/);
+});
+
+test("sendTrialPostLimitReachedEmailIfNeeded: failed時は送信しない", async () => {
+  const customer = { id: "cust_1", email: "a@example.com", plan: ["Standard"] };
+  const sent = await sendTrialPostLimitReachedEmailIfNeeded({ customer, result: "failed", logger: fakeLogger() });
+
+  assert.equal(sent, false);
+  assert.equal(sentMails.length, 0);
 });

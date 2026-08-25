@@ -62,6 +62,35 @@ const TRIAL_POST_LIMIT_WARNING_EMAIL = {
     ].join("\n"),
 };
 
+// トライアル投稿上限（60通）そのものに達した瞬間に送る通知（2026-08-25追加）。
+// activated: trialLimitAutoActivation.jsが実際に本契約へ自動切り替えできたかどうか
+// （支払い方法登録済みでStripeサブスクリプション作成・課金に成功した場合のみtrue）。
+const TRIAL_POST_LIMIT_REACHED_EMAIL = {
+  subject: (activated) =>
+    activated
+      ? "【EdgeAI Lab】無料トライアルの投稿上限に達し、本契約へ切り替わりました"
+      : "【EdgeAI Lab】無料トライアルの投稿上限に達しました",
+  body: (postLimit, paymentUrl, plan, activated) =>
+    [
+      `無料トライアル期間中の投稿数が、上限（${postLimit}通）に達しました。`,
+      `選択プラン: ${planLabel(plan)}`,
+      "",
+      ...(activated
+        ? [
+            "登録済みのお支払い方法へ基本料金のご請求を行い、本契約へ自動的に切り替わりました。",
+            "引き続き投稿をご利用いただけます。",
+          ]
+        : [
+            "これ以降の投稿はできません。",
+            "引き続き投稿をご利用いただくには、お支払い情報のご登録が必要です。",
+            "以下のリンクからお手続きください。",
+            paymentUrl,
+          ]),
+      "",
+      "ご不明な点がございましたら、サポートまでお問い合わせください。",
+    ].join("\n"),
+};
+
 const BACKUP_CARD_CHARGED_EMAIL = {
   subject: "【EdgeAI Lab】お支払い（バックアップカード利用）のお知らせ",
   body: (invoiceUrl) =>
@@ -155,6 +184,7 @@ module.exports = {
   VERIFICATION_EMAIL,
   TRIAL_ENDING_EMAIL,
   TRIAL_POST_LIMIT_WARNING_EMAIL,
+  TRIAL_POST_LIMIT_REACHED_EMAIL,
   BACKUP_CARD_CHARGED_EMAIL,
   INVITATION_EMAIL,
   APPROVAL_REQUEST_EMAIL,

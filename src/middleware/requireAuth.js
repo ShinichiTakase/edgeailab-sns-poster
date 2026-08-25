@@ -9,7 +9,7 @@ const {
   roleOf,
   TRIAL_POST_LIMIT,
 } = require("../lib/customerStore");
-const { activateAfterTrialLimitIfNeeded } = require("../lib/trialLimitAutoActivation");
+const { activateAfterTrialLimitIfNeeded, sendTrialPostLimitReachedEmailIfNeeded } = require("../lib/trialLimitAutoActivation");
 
 function parseCookieHeader(header) {
   const result = {};
@@ -108,6 +108,15 @@ async function requireUnderTrialPostLimit(req, res, next) {
   });
   if (result === "activated") {
     req.customer.status = ["active"];
+    // 60通到達の瞬間ではなく、事後にカードを登録して初めてここで救済された場合も
+    // 同じ通知メールを送る（posts.js側のcrossedTrialPostLimit経路と同じ文面。
+    // "no_payment_method"はここでは送らない。ブロックされ続けている顧客が投稿を
+    // 試みるたびに送られてしまうため）。
+    await sendTrialPostLimitReachedEmailIfNeeded({
+      customer: req.customer,
+      result,
+      logger: { logError: (...args) => console.error(...args) },
+    });
     return next();
   }
 

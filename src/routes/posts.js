@@ -31,7 +31,7 @@ const {
   roleOf,
 } = require("../lib/customerStore");
 const { sendTrialPostLimitWarningIfNeeded } = require("../lib/trialPostLimitWarningMailer");
-const { activateAfterTrialLimitIfNeeded } = require("../lib/trialLimitAutoActivation");
+const { activateAfterTrialLimitIfNeeded, sendTrialPostLimitReachedEmailIfNeeded } = require("../lib/trialLimitAutoActivation");
 const { containsUrl, extractFirstUrl } = require("../lib/urlDetection");
 const xPoster = require("../lib/xPoster");
 const facebookPoster = require("../lib/facebookPoster");
@@ -261,8 +261,13 @@ router.post(
         // 未登録の場合は何もせず、requireUnderTrialPostLimitによる次回以降のブロックが
         // そのまま効く）。
         if (crossedTrialPostLimit(req.customer, before, after)) {
-          await activateAfterTrialLimitIfNeeded({
+          const activationResult = await activateAfterTrialLimitIfNeeded({
             customer: { ...req.customer, trialPostCount: after },
+            logger: { logError: (...args) => console.error(...args) },
+          });
+          await sendTrialPostLimitReachedEmailIfNeeded({
+            customer: { ...req.customer, trialPostCount: after },
+            result: activationResult,
             logger: { logError: (...args) => console.error(...args) },
           });
         }
@@ -369,8 +374,13 @@ router.post(
           });
         }
         if (crossedTrialPostLimit(req.customer, before, after)) {
-          await activateAfterTrialLimitIfNeeded({
+          const activationResult = await activateAfterTrialLimitIfNeeded({
             customer: { ...req.customer, trialPostCount: after },
+            logger: { logError: (...args) => console.error(...args) },
+          });
+          await sendTrialPostLimitReachedEmailIfNeeded({
+            customer: { ...req.customer, trialPostCount: after },
+            result: activationResult,
             logger: { logError: (...args) => console.error(...args) },
           });
         }

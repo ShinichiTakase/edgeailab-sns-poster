@@ -19,7 +19,7 @@ const scheduleTextStore = require("../lib/scheduleTextStore");
 const { createScheduledPost } = require("../lib/scheduledPostStore");
 const { getConnectedEntry } = require("../lib/tokenStore");
 const { getCustomerById, isTrialPostLimitReached, isCanceled, requiresPaymentRegistration } = require("../lib/customerStore");
-const { activateAfterTrialLimitIfNeeded } = require("../lib/trialLimitAutoActivation");
+const { activateAfterTrialLimitIfNeeded, sendTrialPostLimitReachedEmailIfNeeded } = require("../lib/trialLimitAutoActivation");
 const { containsUrl } = require("../lib/urlDetection");
 const {
   matchesWeekday,
@@ -81,6 +81,7 @@ async function main() {
         const result = await activateAfterTrialLimitIfNeeded({ customer, logger: { logError } });
         if (result === "activated") {
           customer.status = ["active"];
+          await sendTrialPostLimitReachedEmailIfNeeded({ customer, result, logger: { logError } });
         } else {
           continue;
         }

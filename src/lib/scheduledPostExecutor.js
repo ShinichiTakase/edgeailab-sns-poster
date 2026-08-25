@@ -20,7 +20,7 @@ const { containsUrl, extractFirstUrl } = require("./urlDetection");
 const scheduleStore = require("./scheduleStore");
 const { sendScheduleResultEmail } = require("./scheduleResultMailer");
 const { sendTrialPostLimitWarningIfNeeded } = require("./trialPostLimitWarningMailer");
-const { activateAfterTrialLimitIfNeeded } = require("./trialLimitAutoActivation");
+const { activateAfterTrialLimitIfNeeded, sendTrialPostLimitReachedEmailIfNeeded } = require("./trialLimitAutoActivation");
 const xPoster = require("./xPoster");
 const facebookPoster = require("./facebookPoster");
 const instagramPoster = require("./instagramPoster");
@@ -92,6 +92,7 @@ async function attemptScheduledPost(post, customerCache, logger) {
     const result = await activateAfterTrialLimitIfNeeded({ customer, logger });
     if (result === "activated") {
       customer.status = ["active"];
+      await sendTrialPostLimitReachedEmailIfNeeded({ customer, result, logger });
     } else {
       throw new Error("trial_post_limit_reached");
     }
@@ -146,6 +147,7 @@ async function attemptScheduledPost(post, customerCache, logger) {
         if (result === "activated") {
           customer.status = ["active"];
         }
+        await sendTrialPostLimitReachedEmailIfNeeded({ customer, result, logger });
       }
     } catch (countErr) {
       logger.logError(`[scheduledPostExecutor] trial post count update failed id=${post.id}:`, countErr);

@@ -14,6 +14,7 @@ require("dotenv").config({ path: path.join(__dirname, "..", "..", ".env") });
 const customerStore = require("../lib/customerStore");
 const stripeClient = require("../lib/stripeClient");
 const stripePricing = require("../lib/stripePricing");
+const customerMailer = require("../lib/customerMailer");
 const { signSession, COOKIE_NAME } = require("../lib/jwt");
 
 let currentCustomer = null;
@@ -29,6 +30,15 @@ stripeClient.getStripe = () => ({
   paymentMethods: { list: async () => ({ data: fakeCards }) },
   subscriptions: { create: async () => ({ id: "sub_new", status: "active" }) },
 });
+
+// 自動アクティベート成功時、requireUnderTrialPostLimitはtrialLimitAutoActivation.js
+// 経由で通知メールも送る（2026-08-25追加）。.envにSMTP設定が入っているため、
+// モックしないとテスト実行のたびに実メールが飛んでしまう。
+let sentMails = [];
+customerMailer.sendCustomerMail = async ({ toEmail, subject, text }) => {
+  sentMails.push({ toEmail, subject, text });
+  return { ok: true };
+};
 
 stripePricing.pricesForPlan = () => ({ base: "price_base", metered: "price_metered", meteredX: "price_metered_x" });
 stripePricing.planKey = (customer) => {
@@ -75,6 +85,7 @@ function authedGet() {
 test.beforeEach(() => {
   fakeCards = [];
   updatedCustomers = [];
+  sentMails = [];
 });
 
 test("投稿上限未満なら通す", async () => {
@@ -121,4 +132,7 @@ test("上限到達だが支払い方法登録済みなら、その場で自動�
   assert.deepEqual(res.body.status, ["active"]);
   assert.equal(updatedCustomers.length, 1);
   assert.deepEqual(updatedCustomers[0].patch.status, ["active"]);
+  // 救済経路での自動アクティベート成功時も、投稿上限到達の通知メールを送る
+  assert.equal(sentMails.length, 1);
+  assert.match(sentMails[0].subject, /本契約へ切り替わりました/);
 });
