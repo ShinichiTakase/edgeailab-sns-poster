@@ -222,17 +222,38 @@ OAuth開始route専用のサーバーサイドゲート。2段階チェック:
 
 ```json
 {
-  "facebook": { "mode": "dev", "allowedSlugs": ["biza3cp70"] },
-  "instagram": { "mode": "dev", "allowedSlugs": ["biza3cp70"] },
-  "threads": { "mode": "dev", "allowedSlugs": ["biza3cp70"] },
+  "facebook": { "mode": "dev", "allowedSlugs": ["biza3cp70", "k22n7qwhimx", "eagvpvste2cu"] },
+  "instagram": { "mode": "dev", "allowedSlugs": ["biza3cp70", "k22n7qwhimx", "eagvpvste2cu"] },
+  "threads": { "mode": "dev", "allowedSlugs": ["biza3cp70", "k22n7qwhimx", "eagvpvste2cu"] },
   "x": { "mode": "live" }
 }
 ```
 `mode: "dev"`のプラットフォームは`allowedSlugs`に含まれる顧客のみ利用可能。
 毎回ディスクから読み直すためキャッシュなし（運用側がコード変更なしにdev→live切替可能）。
 
-**現状（2026-08-22）、Facebook・Instagram・Threadsは全てdevモードでテスト顧客1件
-（`biza3cp70`）にのみ許可されており、Xのみliveで一般公開されている。**
+**「allowedSlugs」という名前だが、中身はmicroCMSの`slug`フィールド（`customerStore.js`の
+`crypto.randomUUID()`）ではなく、`req.customer.id`（microCMSのコンテンツID。例:
+`biza3cp70`・`k22n7qwhimx`）である。** instagram.js/facebook.js/threads.js/x.js/linkedin.js
+は全て`const slug = req.customer.id;`という書き方でローカル変数名を「slug」としているが
+（token store・`isPlatformAvailable`のキーとして使うのはこの`.id`）、customerレコード上に
+実在する`slug`フィールド（UUID）とは別物なので混同しないこと。
+
+このallowedSlugsはアプリ内部のゲートであり、Meta Developer Console側でテストユーザーとして
+承認するのとは別に、ここへも顧客の（`.slug`ではなく）`.id`を追加登録しないと`available: false`
+のまま「近日公開予定です」表示・連携ボタングレーアウトになる（2026-08-25、
+`info@108teaworks.com`（id: `k22n7qwhimx`）がMeta側は承認済みなのにこちらの登録漏れで
+連携できない不具合が発生し追加登録。最初`.slug`フィールドの値を登録してしまい直らず、
+`.id`だと気づいて登録し直した実例）。
+
+同様に2026-08-25、Meta App Review用のテストアカウント`shin.takase@edgeailab.jp`
+（トップレベルcustomer、id: `eagvpvste2cu`、`contactName: "META TEST"`）も
+Facebook/Threads/Instagramの連携ボタンがDisableになっていたため追加登録した。
+Meta審査（App Review）自体はまだ完了しておらず現在もDevモードのため、
+今後の新規サインアップも同様にこのファイルへの手動追加が必要になる
+（審査完了後は`mode`を`"live"`に変更すればこの手動追加は不要になる）。
+
+**現状（2026-08-25）、Facebook・Instagram・Threadsは全てdevモードでテスト顧客3件
+（`biza3cp70`、`k22n7qwhimx`、`eagvpvste2cu`）にのみ許可されており、Xのみliveで一般公開されている。**
 
 ## planLimitsConfig.js + config/planLimits.json
 
