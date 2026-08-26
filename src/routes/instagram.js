@@ -6,7 +6,7 @@ const { savePlatformTokens, getConnectedEntry, deletePlatformTokensByUserId, fin
 // state(OAuth) と同じ「短命トークン→データ」の仕組みを、アカウント切替確認の
 // 一時保管にもそのまま流用する（用途はPKCE専用ではなく汎用のTTL付きmapのため）。
 const pkceStore = require("../lib/pkceStore");
-const { requireAuth, blockExpiredTrial, blockViewerRoleRedirect, blockEditorRoleRedirect } = require("../middleware/requireAuth");
+const { requireAuth, blockExpiredTrial, blockViewerRoleRedirect, blockEditorRoleRedirect, blockApproverRoleRedirect } = require("../middleware/requireAuth");
 const { requireSnsConnectionAvailable } = require("../middleware/snsConnectionGuard");
 
 const router = express.Router();
@@ -93,7 +93,7 @@ const GRAPH_URL = `https://graph.instagram.com/${GRAPH_API_VERSION}`;
 
 // 動作確認・実運用の両方でこのエンドポイントから開始する。
 // state を発行してslug（クライアント識別子）と紐付け、Facebook/Threadsの実装と同じ方式でコールバックへ受け渡す。
-router.get("/oauth/instagram/start", requireAuth, blockExpiredTrial, blockViewerRoleRedirect, blockEditorRoleRedirect, requireSnsConnectionAvailable("instagram"), (req, res) => {
+router.get("/oauth/instagram/start", requireAuth, blockExpiredTrial, blockViewerRoleRedirect, blockEditorRoleRedirect, blockApproverRoleRedirect, requireSnsConnectionAvailable("instagram"), (req, res) => {
   const slug = req.customer.id;
 
   const state = crypto.randomBytes(24).toString("hex");

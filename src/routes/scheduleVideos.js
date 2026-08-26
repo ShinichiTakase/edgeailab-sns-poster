@@ -2,7 +2,7 @@
 // 生成は数分かかるため、POST /generate はジョブIDのみ即時返し、実際の進捗は
 // GET /jobs/:jobId をクライアント側でポーリングする方式にしている。
 const express = require("express");
-const { requireAuth, requireVerified, blockExpiredTrial, blockViewerRole } = require("../middleware/requireAuth");
+const { requireAuth, requireVerified, blockExpiredTrial, blockViewerRole, blockApproverRole } = require("../middleware/requireAuth");
 const scheduleStore = require("../lib/scheduleStore");
 const {
   startVideoGenerationJob,
@@ -28,7 +28,7 @@ router.post(
   requireAuth,
   requireVerified,
   blockExpiredTrial,
-  blockViewerRole,
+  blockViewerRole, blockApproverRole,
   express.json(),
   async (req, res) => {
     try {
@@ -54,7 +54,7 @@ router.post(
   }
 );
 
-router.get("/api/schedules/:id/texts/videos/jobs/:jobId", requireAuth, blockViewerRole, async (req, res) => {
+router.get("/api/schedules/:id/texts/videos/jobs/:jobId", requireAuth, blockViewerRole, blockApproverRole, async (req, res) => {
   const schedule = await loadOwnedSchedule(req, res);
   if (!schedule) return;
   const job = getJob(req.params.jobId);
@@ -62,7 +62,7 @@ router.get("/api/schedules/:id/texts/videos/jobs/:jobId", requireAuth, blockView
   res.json(serializeJob(job));
 });
 
-router.post("/api/schedules/:id/texts/videos/jobs/:jobId/cancel", requireAuth, blockViewerRole, async (req, res) => {
+router.post("/api/schedules/:id/texts/videos/jobs/:jobId/cancel", requireAuth, blockViewerRole, blockApproverRole, async (req, res) => {
   const schedule = await loadOwnedSchedule(req, res);
   if (!schedule) return;
   const ok = cancelJob(req.params.jobId);
@@ -75,7 +75,7 @@ router.post(
   requireAuth,
   requireVerified,
   blockExpiredTrial,
-  blockViewerRole,
+  blockViewerRole, blockApproverRole,
   express.json(),
   async (req, res) => {
     try {

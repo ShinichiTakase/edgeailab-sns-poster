@@ -392,7 +392,13 @@ router.post("/api/auth/login", express.json(), async (req, res) => {
 
     const sessionToken = signSession(customer, user);
     setSessionCookie(res, sessionToken);
-    res.json({ ok: true, isVerified: Boolean(customer.isVerified) });
+    // 承認者ロールはログイン直後の初期画面をdashboard.htmlではなくapproval.html
+    // （承認待ち一覧）にするため、フロント側の遷移先判定にroleを渡す。
+    res.json({
+      ok: true,
+      isVerified: Boolean(customer.isVerified),
+      role: Array.isArray(user.role) ? user.role[0] : user.role,
+    });
   } catch (err) {
     console.error("[auth/login] failed:", err);
     res.status(500).json({ error: "internal_error" });

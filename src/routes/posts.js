@@ -5,7 +5,7 @@ const {
   blockExpiredTrial,
   requireUnderTrialPostLimit,
   blockCanceledCustomer,
-  blockViewerRole,
+  blockViewerRole, blockApproverRole,
   blockEditorRole,
 } = require("../middleware/requireAuth");
 const { loadStore, accountNameFor } = require("../lib/tokenStore");
@@ -157,7 +157,7 @@ router.post(
   blockExpiredTrial,
   requireUnderTrialPostLimit,
   blockCanceledCustomer,
-  blockViewerRole,
+  blockViewerRole, blockApproverRole,
   express.json(),
   async (req, res) => {
     const { platforms, texts, imageUrl, facebookPageId } = req.body || {};
@@ -288,7 +288,7 @@ router.post(
   blockExpiredTrial,
   requireUnderTrialPostLimit,
   blockCanceledCustomer,
-  blockViewerRole,
+  blockViewerRole, blockApproverRole,
   express.json(),
   async (req, res) => {
     const { platforms, texts, imageUrl, facebookPageId, scheduledAt } = req.body || {};

@@ -4,7 +4,7 @@ const fs = require("fs");
 const path = require("path");
 const { savePlatformTokens, deletePlatformTokensByUserId, findDuplicateOwner } = require("../lib/tokenStore");
 const pkceStore = require("../lib/pkceStore");
-const { requireAuth, blockExpiredTrial, blockViewerRoleRedirect, blockEditorRoleRedirect } = require("../middleware/requireAuth");
+const { requireAuth, blockExpiredTrial, blockViewerRoleRedirect, blockEditorRoleRedirect, blockApproverRoleRedirect } = require("../middleware/requireAuth");
 const { requireSnsConnectionAvailable } = require("../middleware/snsConnectionGuard");
 
 const router = express.Router();
@@ -74,7 +74,7 @@ const GRAPH_URL = `https://graph.facebook.com/${GRAPH_API_VERSION}`;
 
 // 動作確認・実運用の両方でこのエンドポイントから開始する。
 // state を発行してslug（クライアント識別子）と紐付け、Xの実装と同じ方式でコールバックへ受け渡す。
-router.get("/oauth/facebook/start", requireAuth, blockExpiredTrial, blockViewerRoleRedirect, blockEditorRoleRedirect, requireSnsConnectionAvailable("facebook"), (req, res) => {
+router.get("/oauth/facebook/start", requireAuth, blockExpiredTrial, blockViewerRoleRedirect, blockEditorRoleRedirect, blockApproverRoleRedirect, requireSnsConnectionAvailable("facebook"), (req, res) => {
   const slug = req.customer.id;
 
   const state = crypto.randomBytes(24).toString("hex");

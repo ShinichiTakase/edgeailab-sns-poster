@@ -182,6 +182,27 @@ function blockEditorRoleRedirect(req, res, next) {
   next();
 }
 
+// 承認者ロールのメニュー項目別使用可否（2026-08-27追加）: SNS連携・スケジュール投稿・
+// ワンショット投稿・メンバーを招待する・請求情報・お支払い方法・アップグレードは
+// 「使用不可」（投稿一覧・承認待ち一覧は使用可）。blockViewerRole/blockEditorRoleと
+// 同じくfetch経由のAPI向けJSON 403版。
+function blockApproverRole(req, res, next) {
+  if (roleOf(req.user) === "承認者") {
+    return res.status(403).json({ error: "forbidden", message: "承認者権限ではこの操作はできません" });
+  }
+  next();
+}
+
+// blockApproverRoleのredirect版。/oauth/*/startのような、ブラウザの直接ナビゲーションで
+// 叩かれるGETルート向け。承認者はSNS連携（onboarding.html）自体が使用不可のため、
+// blockEditorRoleRedirectと同様dashboard.htmlへ戻す。
+function blockApproverRoleRedirect(req, res, next) {
+  if (roleOf(req.user) === "承認者") {
+    return res.redirect("/dashboard.html");
+  }
+  next();
+}
+
 module.exports = {
   requireAuth,
   requireVerified,
@@ -192,6 +213,8 @@ module.exports = {
   blockViewerRoleRedirect,
   blockEditorRole,
   blockEditorRoleRedirect,
+  blockApproverRole,
+  blockApproverRoleRedirect,
   readSessionToken,
   parseCookieHeader,
 };

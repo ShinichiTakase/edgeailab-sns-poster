@@ -3,7 +3,7 @@
 // （/oauth/{platform}/start のガード（src/middleware/snsConnectionGuard.js）と
 // 判定ロジックを一致させること）。
 const express = require("express");
-const { requireAuth, blockViewerRole, blockEditorRole } = require("../middleware/requireAuth");
+const { requireAuth, blockViewerRole, blockEditorRole, blockApproverRole } = require("../middleware/requireAuth");
 const { getConnectedEntry, deletePlatformTokensBySlug, accountNameFor } = require("../lib/tokenStore");
 const { planKey } = require("../lib/stripePricing");
 const { getMaxConnections } = require("../lib/planLimitsConfig");
@@ -45,7 +45,7 @@ router.get("/api/sns-connections", requireAuth, (req, res) => {
   res.json({ plan, maxConnections, connectedCount, platforms });
 });
 
-router.post("/api/sns-connections/:platform/disconnect", requireAuth, blockViewerRole, blockEditorRole, async (req, res) => {
+router.post("/api/sns-connections/:platform/disconnect", requireAuth, blockViewerRole, blockEditorRole, blockApproverRole, async (req, res) => {
   const { platform } = req.params;
   if (!PLATFORMS.includes(platform)) {
     return res.status(400).json({ error: "invalid_platform" });

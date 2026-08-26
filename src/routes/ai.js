@@ -1,5 +1,5 @@
 const express = require("express");
-const { requireAuth, blockExpiredTrial, blockViewerRole } = require("../middleware/requireAuth");
+const { requireAuth, blockExpiredTrial, blockViewerRole, blockApproverRole } = require("../middleware/requireAuth");
 const { generatePostCopy, generatePostCopyVariations } = require("../lib/postCopyGenerator");
 const { fetchUrlText } = require("../lib/urlTextFetcher");
 const { classifyFetchError, classifyGenerationError } = require("../lib/generationErrors");
@@ -35,7 +35,7 @@ router.get("/api/ai/config", requireAuth, (req, res) => {
 
 // 原文（URL未使用）からAI文案生成。投稿自体ではないためトライアル投稿数上限は関係ない。
 // メール認証未完了でも文案作成自体は試せるようにする（ブロックするのは実際の投稿・予約のみ）。
-router.post("/api/ai/generate-post", requireAuth, blockExpiredTrial, blockViewerRole, express.json(), async (req, res) => {
+router.post("/api/ai/generate-post", requireAuth, blockExpiredTrial, blockViewerRole, blockApproverRole, express.json(), async (req, res) => {
   const { platforms, sourceText } = req.body || {};
   if (!validatePlatforms(platforms)) {
     return res.status(400).json({ error: "invalid_platforms" });
@@ -58,7 +58,7 @@ router.post(
   "/api/ai/generate-post-from-url",
   requireAuth,
   blockExpiredTrial,
-  blockViewerRole,
+  blockViewerRole, blockApproverRole,
   express.json(),
   async (req, res) => {
     const { platforms, url } = req.body || {};
@@ -92,7 +92,7 @@ router.post(
   "/api/ai/generate-post-variations",
   requireAuth,
   blockExpiredTrial,
-  blockViewerRole,
+  blockViewerRole, blockApproverRole,
   express.json(),
   async (req, res) => {
     const __routeT0 = Date.now();
@@ -121,7 +121,7 @@ router.post(
   "/api/ai/generate-post-variations-from-url",
   requireAuth,
   blockExpiredTrial,
-  blockViewerRole,
+  blockViewerRole, blockApproverRole,
   express.json(),
   async (req, res) => {
     // 体感速度の遅さの原因切り分け調査用（2026-08-20）。fetch・AI生成・リクエスト全体
