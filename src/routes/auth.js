@@ -470,6 +470,10 @@ router.get("/api/auth/me", requireAuth, async (req, res) => {
     connectedPlatforms: connected,
     user: {
       email: req.user.email,
+      // 招待メンバーは招待時に入力した氏名（users[].name）を持つが、
+      // サインアップ本人のusers[0]要素にはnameが無くcontactNameのみが氏名
+      // （フロント側でcontactNameへフォールバックする）。
+      name: req.user.name || null,
       role: Array.isArray(req.user.role) ? req.user.role[0] || null : req.user.role || null,
     },
   });
