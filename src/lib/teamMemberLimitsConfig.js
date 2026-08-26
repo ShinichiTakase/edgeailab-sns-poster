@@ -1,5 +1,5 @@
 // ユーザー（管理者含む）数のプラン別上限の単一情報源（config/teamMemberLimits.json）を読み込む。
-// pricing.html記載の「ユーザー（管理者）数上限」（Basic 1名／Standard・Advanced 各3名）と一致させること。
+// pricing.html記載の「管理ユーザー数上限」（Basic 1名／Standard 3名／Advanced 5名）と一致させること。
 const fs = require("fs");
 const path = require("path");
 
