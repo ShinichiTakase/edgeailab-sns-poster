@@ -162,6 +162,17 @@ CLAUDE.md記載の`refreshThreadsTokens.js`と整合）。
 client_secretをボディに含める方式にフォールバックする2段構え（Xの挙動が一定しない
 ことへの防御、とコメントに明記）。保存形式に`refresh_token`を持つのはXのみ。
 
+## Instagramリール投稿とフィード（グリッド）二重掲載の防止（2026-08-26追加）
+
+`postReel`（[src/lib/instagramPoster.js](../src/lib/instagramPoster.js)）でメディアコンテナを
+作成する際、Meta Graph APIの`share_to_feed`パラメータを省略するとデフォルトで`true`扱いに
+なり、リールタブだけでなくプロフィールのグリッド（フィード）にも自動的に投稿されてしまう
+（実機で確認: 2026-08-26、顧客からの報告）。動画付きのスケジュール投稿は
+[scheduledPostExecutor.js](../src/lib/scheduledPostExecutor.js)の`postToPlatform`から
+`postReel`のみが呼ばれておりコード側の二重呼び出しではないため、原因はこのAPI
+パラメータ未指定によるMeta側のデフォルト挙動だった。`postReel`のリクエストボディに
+`share_to_feed: false`を明示することで、リールタブのみに投稿されるよう修正した。
+
 ## Meta系のデータ削除コールバック（Facebook/Instagram/Threads共通パターン）
 
 `signed_request`（HMAC-SHA256署名付きbase64url JSON）を`crypto.timingSafeEqual`で

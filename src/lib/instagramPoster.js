@@ -93,6 +93,10 @@ async function postReel({ igUserId, accessToken }, text, videoUrl) {
       media_type: "REELS",
       video_url: videoUrl,
       caption: text || "",
+      // share_to_feedを省略するとMeta側デフォルトのtrue扱いになり、リールタブに加えて
+      // プロフィールのグリッド（フィード）にも自動的に二重掲載されてしまう。
+      // リールのみに投稿するため明示的にfalseを指定する。
+      share_to_feed: false,
       access_token: accessToken,
     }),
   });
