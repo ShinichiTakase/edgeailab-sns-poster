@@ -87,8 +87,11 @@ router.post("/api/team/invite", requireAuth, requireVerified, express.json(), as
     // 一メンバーとして扱えてしまうこと自体が意図しない状態のため、全顧客レコードを
     // 対象に判定する（getCustomerByEmailはcustomer.email＝契約者本人のメールのみを
     // 見るため、単なる招待メンバーのメールとは衝突しない）。
+    // 解約済み（status: canceled）のアカウントはcustomersレコード自体は残る
+    // （正規の解約は論理削除。orphanSnsTokenCheck.jsのコメント参照）ため、解約後は
+    // そのメールを他アカウントのメンバーとして招待できるようにする必要がある。
     const mainUserCustomer = await customerStore.getCustomerByEmail(target);
-    if (mainUserCustomer) {
+    if (mainUserCustomer && !customerStore.isCanceled(mainUserCustomer)) {
       return res.status(409).json({ error: "cannot_invite_main_user" });
     }
 
