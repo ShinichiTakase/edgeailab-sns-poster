@@ -51,7 +51,11 @@ async function pickVideoStyle({ captionText }) {
   }
   const response = await anthropic.messages.create(
     {
-      model: "claude-opus-5",
+      // アクセントカラー1つ・BGMフォルダ1つを選ぶだけの軽いタスクのため、postCopyGenerator.js
+      // の本文生成と同じclaude-sonnet-5を使う（従来claude-opus-5を使っていたが、この程度の
+      // タスクには不釣り合いに重く、Opus特有の混雑で529 Overloadedが頻発する一因になっていた。
+      // 2026-08-26改修）。
+      model: "claude-sonnet-5",
       max_tokens: 256,
       thinking: { type: "disabled" },
       output_config: {
@@ -93,6 +97,18 @@ async function pickVideoStyle({ captionText }) {
     throw new Error("ai_no_output");
   }
   return JSON.parse(textBlock.text);
+}
+
+// Claude APIが（SDKのmaxRetries消化後も）529 Overloaded等で応答しない場合のフォールバック。
+// 配色・BGM選定は動画の見た目を整える付加的な要素であり、これが取得できないという理由だけで
+// 動画生成そのものを失敗させるのは本末転倒なため、ランダムに1つ選んで処理を続行する
+// （実機で確認: Anthropic側の混雑により再生成を繰り返しても同じ理由で失敗し続ける事例、
+// 2026-08-26）。
+const FALLBACK_ACCENT_COLORS = ["#0ea5e9", "#f97316", "#8b5cf6", "#22c55e", "#ef4444", "#eab308", "#ec4899", "#14b8a6"];
+function pickFallbackStyle() {
+  const accentColorHex = FALLBACK_ACCENT_COLORS[Math.floor(Math.random() * FALLBACK_ACCENT_COLORS.length)];
+  const bgmFolder = BGM_FOLDERS[Math.floor(Math.random() * BGM_FOLDERS.length)];
+  return { accentColorHex, bgmFolder };
 }
 
 // ---------- WCAG コントラスト比 ----------
@@ -352,7 +368,13 @@ async function renderVideo({ captionText, outPath, signal }) {
   // 体感速度の遅さの原因切り分け調査用（2026-08-20）。Claude API呼び出し（配色・BGM判定）と
   // 実際のffmpeg/canvasレンダリングの所要時間を分けて記録する。
   const __styleT0 = Date.now();
-  const style = await pickVideoStyle({ captionText });
+  let style;
+  try {
+    style = await pickVideoStyle({ captionText });
+  } catch (err) {
+    console.error(`[videoGenerator] pickVideoStyle failed, using fallback style:`, err.message);
+    style = pickFallbackStyle();
+  }
   const __styleMs = Date.now() - __styleT0;
   if (signal?.aborted) throw new DOMExceptionLike("canceled");
 
