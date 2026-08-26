@@ -5,7 +5,7 @@ const customerStore = require("../lib/customerStore");
 const { sendCustomerMail } = require("../lib/customerMailer");
 const { INVITATION_EMAIL } = require("../lib/emailTemplates");
 const { signSession, setSessionCookie } = require("../lib/jwt");
-const { requireAuth, requireVerified } = require("../middleware/requireAuth");
+const { requireAuth, requireVerified, blockEditorRole } = require("../middleware/requireAuth");
 const { planKey } = require("../lib/stripePricing");
 const { getMaxTeamMembers } = require("../lib/teamMemberLimitsConfig");
 
@@ -147,8 +147,10 @@ router.post("/api/team/invite", requireAuth, requireVerified, express.json(), as
 });
 
 // メンバー一覧（team.htmlの表示・招待モーダルの承認者候補取得の両方に使う）。
-// role問わず閲覧可能（承認者選択のためには編集者自身も一覧を見られる必要がある）。
-router.get("/api/team/members", requireAuth, async (req, res) => {
+// 2026-08-27まではrole問わず閲覧可能だったが、「メンバーを招待する：使用不可」
+// （閲覧不可を含む）という編集者向けメニュー制限が明文化されたため、
+// 編集者のみblockEditorRoleで遮断する（他ロールは従来通り閲覧可能）。
+router.get("/api/team/members", requireAuth, blockEditorRole, async (req, res) => {
   const members = (req.customer.users || []).map((u, index) => ({
     userId: u.userId || null,
     name: u.name || "",

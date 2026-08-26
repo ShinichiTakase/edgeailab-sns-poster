@@ -6,6 +6,7 @@ const {
   requireUnderTrialPostLimit,
   blockCanceledCustomer,
   blockViewerRole,
+  blockEditorRole,
 } = require("../middleware/requireAuth");
 const { loadStore, accountNameFor } = require("../lib/tokenStore");
 const { reportMeterEvent } = require("../lib/meterEvents");
@@ -399,7 +400,7 @@ function platformDisplayLabel(value) {
 
 // 投稿一覧画面用。即時投稿（posting_logs）と予約投稿（scheduled_posts）を横断して
 // 顧客自身の全件を返す（他customerのデータは返さない。IDOR対策はposts.js全体の方針に合わせる）。
-router.get("/api/posts/list", requireAuth, async (req, res) => {
+router.get("/api/posts/list", requireAuth, blockEditorRole, async (req, res) => {
   const customerCode = req.customer.id;
   const emailByUserId = new Map();
   for (const user of req.customer.users || []) {

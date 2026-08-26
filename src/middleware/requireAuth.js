@@ -161,6 +161,27 @@ function blockViewerRoleRedirect(req, res, next) {
   next();
 }
 
+// 編集者ロールのメニュー項目別使用可否（2026-08-27追加）: SNS連携・投稿一覧・
+// メンバーを招待する・請求情報・お支払い方法・アップグレードは「使用不可」。
+// blockViewerRoleと同じくfetch経由のAPI向けJSON 403版。
+function blockEditorRole(req, res, next) {
+  if (roleOf(req.user) === "編集者") {
+    return res.status(403).json({ error: "forbidden", message: "編集者権限ではこの操作はできません" });
+  }
+  next();
+}
+
+// blockEditorRoleのredirect版。/oauth/*/startのような、ブラウザの直接ナビゲーションで
+// 叩かれるGETルート向け。編集者はSNS連携（onboarding.html）自体が使用不可のため、
+// blockViewerRoleRedirect（閲覧者向け、onboarding.htmlへ戻す）とは異なりdashboard.html
+// へ戻す。
+function blockEditorRoleRedirect(req, res, next) {
+  if (roleOf(req.user) === "編集者") {
+    return res.redirect("/dashboard.html");
+  }
+  next();
+}
+
 module.exports = {
   requireAuth,
   requireVerified,
@@ -169,6 +190,8 @@ module.exports = {
   blockCanceledCustomer,
   blockViewerRole,
   blockViewerRoleRedirect,
+  blockEditorRole,
+  blockEditorRoleRedirect,
   readSessionToken,
   parseCookieHeader,
 };

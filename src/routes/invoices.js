@@ -3,7 +3,7 @@
 // フロント側で行う（Stripeのinvoices.listはカーソール式でオフセット指定ができないため、
 // サーバー側でカーソルを辿って全件取得しておくほうが「Nページ目」の実装が単純になる）。
 const express = require("express");
-const { requireAuth } = require("../middleware/requireAuth");
+const { requireAuth, blockEditorRole } = require("../middleware/requireAuth");
 const { getStripe } = require("../lib/stripeClient");
 const { buildInvoiceSummary } = require("../lib/invoiceSummary");
 const { generateReceiptPdf } = require("../lib/receiptPdf");
@@ -30,7 +30,7 @@ async function listAllFinalizedInvoices(stripe, stripeCustomerId) {
   return all;
 }
 
-router.get("/api/billing/invoices", requireAuth, async (req, res) => {
+router.get("/api/billing/invoices", requireAuth, blockEditorRole, async (req, res) => {
   if (!req.customer.stripeCustomerId) {
     return res.json({ invoices: [] });
   }
@@ -52,7 +52,7 @@ router.get("/api/billing/invoices", requireAuth, async (req, res) => {
   }
 });
 
-router.get("/api/billing/invoices/:invoiceId/receipt", requireAuth, async (req, res) => {
+router.get("/api/billing/invoices/:invoiceId/receipt", requireAuth, blockEditorRole, async (req, res) => {
   if (!req.customer.stripeCustomerId) {
     return res.status(404).json({ error: "invoice_not_found" });
   }

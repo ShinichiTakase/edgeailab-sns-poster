@@ -1,6 +1,6 @@
 const express = require("express");
 const customerStore = require("../lib/customerStore");
-const { requireAuth, blockViewerRole } = require("../middleware/requireAuth");
+const { requireAuth, blockViewerRole, blockEditorRole } = require("../middleware/requireAuth");
 const { getXSurcharge } = require("../lib/surchargeConfig");
 const { getStripe, ensureStripeCustomer } = require("../lib/stripeClient");
 const { planKey, pricesForPlan } = require("../lib/stripePricing");
@@ -90,7 +90,7 @@ router.post("/api/billing/create-checkout-session", requireAuth, express.json(),
 
 // プラン変更（アップグレードのみ）。認証済みセッションのcustomer自身が対象であり、
 // リクエストボディでcustomerIdを受け取ることはない（=なりすまし変更は構造上不可能）。
-router.post("/api/billing/change-plan", requireAuth, blockViewerRole, express.json(), async (req, res) => {
+router.post("/api/billing/change-plan", requireAuth, blockViewerRole, blockEditorRole, express.json(), async (req, res) => {
   const { targetPlan } = req.body || {};
   if (!PLAN_ORDER.includes(targetPlan)) {
     return res.status(400).json({ error: "invalid_target_plan", message: "指定されたプランが不正です。" });
