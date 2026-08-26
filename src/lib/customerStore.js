@@ -125,16 +125,34 @@ async function createCustomer({
   return getCustomerById(created.id);
 }
 
+/**
+ * customersスキーマに未定義のフィールドをpatchに含めるとmicroCMSが400を返し、
+ * status/stripeSubscriptionId等の他の重要な変更も道連れで失敗する
+ * （2026-08-25、trialLimitAutoActivatedAtフィールドのスキーマ追加漏れにより、
+ * トライアル顧客のstatus更新が繰り返し失敗し、Stripeでのサブスクリプション
+ * 二重作成・二重課金を引き起こした実例あり）。該当フィールドを除いて
+ * 再試行することで、スキーマ追加漏れが起きても重要な更新だけは通す。
+ */
 async function updateCustomer(id, patch) {
   const res = await microcmsFetch(`/customers/${encodeURIComponent(id)}`, {
     method: "PATCH",
     body: JSON.stringify(patch),
   });
-  if (!res.ok) {
-    const text = await res.text().catch(() => "");
-    throw new Error(`[customerStore] updateCustomer failed ${res.status} ${text.slice(0, 300)}`);
+  if (res.ok) return true;
+
+  const text = await res.text().catch(() => "");
+  const unexpectedKeyMatch = text.match(/'([^']+)' is unexpected key/);
+  if (res.status === 400 && unexpectedKeyMatch && unexpectedKeyMatch[1] in patch) {
+    const key = unexpectedKeyMatch[1];
+    console.warn(
+      `[customerStore] updateCustomer: microCMSのcustomersスキーマに"${key}"が未定義のため除外して再試行します。スキーマへのフィールド追加を確認してください。`
+    );
+    const rest = { ...patch };
+    delete rest[key];
+    return updateCustomer(id, rest);
   }
-  return true;
+
+  throw new Error(`[customerStore] updateCustomer failed ${res.status} ${text.slice(0, 300)}`);
 }
 
 /** メール認証を完了させ、使用済みトークンを消す（trialEndsAtはサインアップ時点で確定済み） */
@@ -589,6 +607,38 @@ async function listCustomersForTrialReminder(displayDaysBeforeEnd, sentField) {
   return Array.isArray(json.contents) ? json.contents : [];
 }
 
+/**
+ * トライアル中で投稿数上限（60通）に既に達している顧客一覧を取得する
+ * （trialPostLimitAutoActivationSync.js専用）。
+ *
+ * 60通到達時の自動アクティベート（trialLimitAutoActivation.js）は、posts.js・
+ * scheduledPostExecutor.js・scheduleMaterializer.js・requireUnderTrialPostLimit
+ * ミドルウェアの計4箇所いずれかが実際に動くタイミングでしか発火しないリアクティブな
+ * 仕組みのみだった。継続スケジュール投稿しか使っていない顧客が「その日の分は
+ * scheduleMaterializer.jsで既に生成済み（last_materialized_dt一致でスキップ）」
+ * かつ「実行待ちのscheduled_postsが0件（実行トリガーも無い）」という状態に
+ * 一度でも入ると、支払い方法を登録済みでも次にその顧客の予約が新規生成される
+ * タイミング（早くて翌日）までアクティベートされないまま放置される
+ * （実機で確認: shin.takase@icloud.com、2026-08-25）。この関数はその穴を埋める
+ * 日次cron向けに、上記4箇所とは独立して「トライアル中かつ投稿数60通以上」の
+ * 全顧客を横断的に取得する。
+ */
+async function listCustomersOverTrialPostLimit() {
+  const filters = [
+    // statusはmicroCMSのセレクトフィールド（配列書き込み）のため[contains]で一致させる
+    // （listCustomersForTrialReminderと同じ注意点）。
+    "status[contains]trial",
+    `trialPostCount[greater_than]${TRIAL_POST_LIMIT - 1}`,
+  ].join("[and]");
+  const res = await microcmsFetch(`/customers?filters=${encodeURIComponent(filters)}&limit=100`);
+  if (!res.ok) {
+    const text = await res.text().catch(() => "");
+    throw new Error(`[customerStore] listCustomersOverTrialPostLimit failed ${res.status} ${text.slice(0, 300)}`);
+  }
+  const json = await res.json();
+  return Array.isArray(json.contents) ? json.contents : [];
+}
+
 module.exports = {
   getCustomerByEmail,
   customerExistsByEmail,
@@ -612,6 +662,7 @@ module.exports = {
   isCanceled,
   bumpTrialPostCount,
   listCustomersForTrialReminder,
+  listCustomersOverTrialPostLimit,
   listAllCustomers,
   findCustomerAndUserByEmail,
   findCustomerAndUserByInvitationToken,

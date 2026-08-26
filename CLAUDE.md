@@ -71,6 +71,27 @@ Checkoutの`trial_end`設定は、この33日基準のtrialEndsAtをそのまま
 
 詳細は[docs/内部仕様_無料で始める（トライアル）.md](docs/内部仕様_無料で始める（トライアル）.md)参照。
 
+## トライアル投稿上限（60通）到達後の自動アクティベート取りこぼし救済（cron、2026-08-25追加）
+`sns-poster-trial-post-limit-auto-activation-sync`
+（[src/scripts/trialPostLimitAutoActivationSync.js](src/scripts/trialPostLimitAutoActivationSync.js)）も同様に
+`profiles: manual`サービス。60通到達時の自動アクティベート（`trialLimitAutoActivation.js`）は、
+posts.js・scheduledPostExecutor.js・scheduleMaterializer.js・requireUnderTrialPostLimit
+ミドルウェアの計4箇所いずれかが実際に動くタイミングでしか発火しないリアクティブな
+救済経路のみだった。継続スケジュール投稿しか使わない顧客が「その日の分は生成済み
+（scheduleMaterializer.jsのlast_materialized_dt一致でスキップ）」かつ「実行待ちの
+scheduled_postsが0件」という状態に入ると、支払い方法登録済みでも次にその顧客の予約が
+新規生成されるタイミング（早くて翌日）まで放置され続ける不具合が実機で見つかった
+（shin.takase@icloud.com、2026-08-25）。この4箇所とは独立に「トライアル中かつ投稿数
+60通以上」の全顧客を毎時横断的にスキャンし、支払い方法登録済みならアクティベートする。
+実際のcrontab登録は`/etc/cron.d/edgeailab-net-trial-post-limit-auto-activation-sync`に
+毎時15分で実施済み。登録例：
+
+```
+15 * * * * cd /opt/project/deploy/xserver-vps && docker compose run --rm sns-poster-trial-post-limit-auto-activation-sync
+```
+
+詳細は[docs/内部仕様_無料で始める（トライアル）.md](docs/内部仕様_無料で始める（トライアル）.md)参照。
+
 ## 顧客向けメールの共通署名（2026-08-25追加）
 `src/lib/customerMailer.js`の`sendCustomerMail`（認証・招待・トライアル関連・請求関連・
 承認関連・スケジュール投稿結果等、顧客向けメールの唯一の送信経路）は、本文の末尾に
