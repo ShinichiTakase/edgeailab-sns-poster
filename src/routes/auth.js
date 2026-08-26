@@ -23,10 +23,13 @@ const VERIFICATION_TOKEN_TTL_MS = 24 * 60 * 60 * 1000;
 // ぎりぎりに決済登録されるとこの制約に抵触し即時課金にフォールバックしてしまうため、
 // 常に3日超の余裕を内部的に確保している。
 //
-// アクセス制御（customerStore.requiresPaymentRegistration）・請求予測
-// （billing.js の predictFromScheduledPosts / getActivationYearMonth）・トライアル終了
+// アクセス制御（customerStore.requiresPaymentRegistration）・トライアル終了
 // リマインドcron（trialReminderCheck.js）・Stripe Checkoutのtrial_end設定は、
 // このバッファ込みのtrialEndsAtをそのまま使う（変更不要）。
+// 請求予測（billing.js の estimateBillingForecast）は、Checkout完了後（本稼働済み）の
+// 顧客についてはtrialEndsAtを使わず、実際のStripeサブスクリプションのbilling_cycle_anchor
+// を正とする（trialEndsAtは決済登録後もクリアされず残るため、実サイクルとズレる場合がある。
+// 2026-08-26修正）。trialEndsAtはCheckout未完了（トライアル中）の顧客の将来アンカー予測にのみ使う。
 // ダッシュボード等の「残り◯日」カウントダウン表示のみ、safeCustomer()が返す
 // trialDisplayEndsAt（バッファを差し引いた「表向き」の終了日時）を使うこと。
 const TRIAL_DAYS = 30;

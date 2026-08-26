@@ -620,24 +620,75 @@ router.get("/api/billing/upcoming", requireAuth, async (req, res) => {
   }
 
   try {
-    const fromInvoice = await tryUpcomingInvoiceAmounts(stripe, req.customer, prices, parsed.year, parsed.month);
-    if (fromInvoice) {
-      return res.json({ ...fromInvoice, isEstimate: true });
-    }
-
-    const predicted = await predictFromScheduledPosts(stripe, req.customer, prices, parsed.year, parsed.month);
-    res.json({ ...predicted, isEstimate: true });
+    const forecast = await estimateBillingForecast(stripe, req.customer, prices, parsed.year, parsed.month);
+    res.json({ ...forecast, isEstimate: true });
   } catch (err) {
     console.error(`[billing/upcoming] failed customerId=${req.customer.id}:`, err);
     res.status(500).json({ error: "internal_error" });
   }
 });
 
-// Stripeのupcoming invoice previewが指定月の請求対象期間をカバーしていれば、
-// その明細行（Stripeが既に段階制課金込みで計算済みの実額に近い値）を集計して返す。
-// サブスクリプション未作成（トライアル中等）・対象期間外の場合はnullを返し、
-// predictFromScheduledPostsへフォールバックする。
-async function tryUpcomingInvoiceAmounts(stripe, customer, prices, year, month) {
+// 「月」は歴月（カレンダー月）ではなく、実際のStripe請求サイクル（billing_cycle_anchor）基準。
+// 基本料金は先払い（決済日にその日から始まる次周期分を請求）・従量料金とXサーチャージは
+// 後払い（直前の決済日から今回の決済日までに発生した投稿分を、今回の決済日に請求）という
+// Stripe側の実際の請求方式（本ファイル冒頭のsubscription_data.trial_end設定コメント参照）を
+// そのまま予測ロジックにも反映する（2026-08-26改修）。
+//
+// アンカー（基準時刻）は、既にStripeサブスクリプションが存在する顧客はその
+// billing_cycle_anchor（実データ）を正とする。customer.trialEndsAtは決済登録後も
+// クリアされず残り続ける内部値のため、本稼働済みの顧客には使わない
+// （trialEndsAtとbilling_cycle_anchorが実際にズレていたケースを実機で確認済み）。
+// まだCheckout未完了（トライアル中）の顧客のみ、trialEndsAt+1日を将来のアンカー予測値として使う。
+async function getBillingCycleAnchor(stripe, customer) {
+  if (customer.stripeSubscriptionId) {
+    try {
+      const subscription = await stripe.subscriptions.retrieve(customer.stripeSubscriptionId);
+      return new Date(subscription.billing_cycle_anchor * 1000);
+    } catch (err) {
+      console.error(`[billing/upcoming] failed to retrieve subscription for anchor customerId=${customer.id}:`, err);
+      return null;
+    }
+  }
+  if (!customer.trialEndsAt) return null;
+  return new Date(new Date(customer.trialEndsAt).getTime() + 24 * 60 * 60 * 1000);
+}
+
+// アンカー日時からn周期後の決済日を求める。Stripeの実際の月次課金アンカーの挙動
+// （日単位・当月に該当日が無ければその月の最終日に丸める。例: 起点1/31なら2月は2/28）に
+// 合わせる（実機検証済みのStripe挙動。CLAUDE.md参照）。
+function addStripeStyleMonths(anchor, n) {
+  const day = anchor.getDate();
+  const base = new Date(
+    anchor.getFullYear(),
+    anchor.getMonth() + n,
+    1,
+    anchor.getHours(),
+    anchor.getMinutes(),
+    anchor.getSeconds(),
+    anchor.getMilliseconds()
+  );
+  const daysInTargetMonth = new Date(base.getFullYear(), base.getMonth() + 1, 0).getDate();
+  base.setDate(Math.min(day, daysInTargetMonth));
+  return base;
+}
+
+// 指定したカレンダー年月に決済日が属する周期番号nを求める（n=0が最初の決済＝本稼働開始日、
+// n未満は本稼働前で対象月なし）。月次サイクルのため該当月には必ずちょうど1つの決済日が
+// 存在する前提で、概算位置の前後1周期のみ確認すれば十分。
+function findCycleIndexForMonth(anchor, year, month) {
+  const approx = year * 12 + (month - 1) - (anchor.getFullYear() * 12 + anchor.getMonth());
+  for (const n of [approx - 1, approx, approx + 1]) {
+    const d = addStripeStyleMonths(anchor, n);
+    if (d.getFullYear() === year && d.getMonth() === month - 1) return n;
+  }
+  return null;
+}
+
+// 直近（今まさに進行中、またはStripeが次回請求として追跡している）の周期であれば、
+// Stripeのupcoming invoice previewには既に実際に報告済みのMeterイベント（＝実投稿）が
+// 段階制課金込みで反映されている（実機検証済み）ため、その実額をそのまま使う。
+// 対象外（2周期以上先で、Stripeがまだ追跡していない月）ならnullを返す。
+async function fetchRealCycleUsage(stripe, customer, prices, cycleEnd) {
   if (!customer.stripeSubscriptionId) return null;
 
   let preview;
@@ -648,42 +699,24 @@ async function tryUpcomingInvoiceAmounts(stripe, customer, prices, year, month) 
     return null;
   }
 
-  const monthStart = new Date(year, month - 1, 1).getTime() / 1000;
-  if (monthStart < preview.period_start || monthStart >= preview.period_end) return null;
+  // こちらの計算した決済日とStripe側のpreview.period_endが一致する場合のみ「実データ」として使う
+  // （数十秒程度のずれは許容。ずれていれば別周期なのでフォールバックに委ねる）。
+  const previewCycleEnd = new Date(preview.period_end * 1000);
+  if (Math.abs(previewCycleEnd.getTime() - cycleEnd.getTime()) >= 60 * 1000) return null;
 
-  let basicFee = 0;
   let usageFee = 0;
   let xSurcharge = 0;
   for (const line of preview.lines.data) {
     const priceId = line.price && line.price.id;
-    if (priceId === prices.base) basicFee += line.amount;
-    else if (priceId === prices.metered) usageFee += line.amount;
+    if (priceId === prices.metered) usageFee += line.amount;
     else if (priceId === prices.meteredX) xSurcharge += line.amount;
   }
-  return { basicFee, usageFee, xSurcharge, total: basicFee + usageFee + xSurcharge };
+  return { usageFee, xSurcharge };
 }
 
-// トライアル終了日（customer.trialEndsAt）の翌日を「本稼働開始日」とする。
-// この日を含む月が初回請求月（基本料金のみ）、以降は毎月請求される前提。
-// 実際のStripeサブスクリプションのbilling_cycle_anchor（日単位、月末日のずれ調整）までは
-// 再現せず、請求予測カードが元々カレンダー月単位で集計している都合に合わせ、
-// 「本稼働開始日が属する月」を基準にした月単位の近似とする。
-// customer.trialEndsAtは「表向き」の日数より3日長い内部バッファ込みの値
-// （routes/auth.js の TRIAL_INTERNAL_BUFFER_DAYS 参照）。実際にStripeへ請求される
-// タイミングと一致させるため、ここでは意図的にそのまま（バッファ込みで）使う。
-function getActivationYearMonth(customer) {
-  if (!customer.trialEndsAt) return null;
-  const trialEnd = new Date(customer.trialEndsAt);
-  const activation = new Date(trialEnd.getFullYear(), trialEnd.getMonth(), trialEnd.getDate() + 1);
-  return { year: activation.getFullYear(), month: activation.getMonth() + 1 };
-}
-
-// 対象月内で、この顧客の全スケジュール投稿（post_schedules）が生成するはずの投稿予定を
+// 対象期間内で、この顧客の全スケジュール投稿（post_schedules）が生成するはずの投稿予定を
 // 合算する（1件ずつの単発予約=scheduled_postsとは別集計。estimateScheduleFirings参照）。
-async function getScheduleForecastForCustomer(customerId, year, month) {
-  const windowStart = new Date(year, month - 1, 1);
-  const windowEnd = new Date(year, month, 1);
-
+async function getScheduleForecastForCustomer(customerId, windowStart, windowEnd) {
   const schedules = await listSchedulesForCustomer(customerId);
   let totalCount = 0;
   let xUrlCount = 0;
@@ -700,50 +733,42 @@ async function getScheduleForecastForCustomer(customerId, year, month) {
   return { totalCount, xUrlCount };
 }
 
-// 実請求サイクル外の月は、scheduled_postsの予定件数（単発の予約投稿）＋スケジュール投稿の
-// 生成予定件数を、StripeのPrice tiers（単一の情報源）に当てはめて予測する。基本料金・
-// 従量単価をこのコードにハードコードしない。トライアル中（本稼働開始日より前の月）は
-// 請求ゼロ、本稼働開始月は基本料金のみ、それ以降は基本料金＋前月分の従量料金・
-// Xサーチャージ（後払い方式）を予測する。
-async function predictFromScheduledPosts(stripe, customer, prices, year, month) {
-  // customer.trialEndsAtは決済登録（Checkout完了）後もクリアされずそのまま残るため、
-  // 既にstripeSubscriptionIdを持つ（=本稼働済みの）顧客にgetActivationYearMonth()を
-  // 適用すると、trialEndsAtの属する月より前のカレンダー月を常に「トライアル中」と
-  // 誤判定してしまう。実際の請求サイクル（billing_cycle_anchor）とカレンダー月がずれて
-  // tryUpcomingInvoiceAmountsの対象外になった月（例:
-  // 請求サイクルが毎月25日始まりの顧客が当月分を見る場合）で、既に課金中にもかかわらず
-  // 請求予測が基本料金含め全項目0円になる不具合があった（実機で確認、2026-08-26）。
-  // トライアル未消化（＝まだCheckout未完了）の顧客にのみこの判定を適用する。
-  const activation = customer.stripeSubscriptionId ? null : getActivationYearMonth(customer);
-  if (activation) {
-    const targetKey = year * 12 + month;
-    const activationKey = activation.year * 12 + activation.month;
+// 指定カレンダー月に決済日が来る請求を予測する。基本料金＝その決済日から始まる次周期分
+// （先払い）、従量料金・Xサーチャージ＝直前の決済日からこの決済日までの投稿分（後払い）。
+// 本稼働前（周期番号n<0）は請求ゼロ、最初の決済（n=0）は基本料金のみ（従量分の対象期間が
+// 存在しないため）。n>=1でStripeがまだ実績を追跡していない先の月は、scheduled_posts
+// （単発予約）＋スケジュール投稿の生成予定件数を、StripeのPrice tiers（単一の情報源）に
+// 当てはめて見積もる（単価・閾値はハードコードしない）。
+async function estimateBillingForecast(stripe, customer, prices, year, month) {
+  const anchor = await getBillingCycleAnchor(stripe, customer);
+  if (!anchor) return { basicFee: 0, usageFee: 0, xSurcharge: 0, total: 0 };
 
-    if (targetKey < activationKey) {
-      // トライアル期間中はまだ本稼働していないため請求は発生しない
-      return { basicFee: 0, usageFee: 0, xSurcharge: 0, total: 0 };
-    }
-    if (targetKey === activationKey) {
-      // 本稼働開始月の初回請求は基本料金のみ（従量分は翌月請求）
-      const basePrice = await stripe.prices.retrieve(prices.base);
-      const basicFee = basePrice.unit_amount || 0;
-      return { basicFee, usageFee: 0, xSurcharge: 0, total: basicFee };
-    }
+  const n = findCycleIndexForMonth(anchor, year, month);
+  if (n === null || n < 0) return { basicFee: 0, usageFee: 0, xSurcharge: 0, total: 0 };
+
+  const basePrice = await stripe.prices.retrieve(prices.base);
+  const basicFee = basePrice.unit_amount || 0;
+
+  if (n === 0) return { basicFee, usageFee: 0, xSurcharge: 0, total: basicFee };
+
+  const cycleStart = addStripeStyleMonths(anchor, n - 1);
+  const cycleEnd = addStripeStyleMonths(anchor, n);
+
+  const real = await fetchRealCycleUsage(stripe, customer, prices, cycleEnd);
+  if (real) {
+    return { basicFee, usageFee: real.usageFee, xSurcharge: real.xSurcharge, total: basicFee + real.usageFee + real.xSurcharge };
   }
 
-  // 2回目以降の請求（後払い）は、前月分の予定投稿件数から従量料金・Xサーチャージを予測する。
-  const prevMonth = month === 1 ? 12 : month - 1;
-  const prevYear = month === 1 ? year - 1 : year;
-
-  const [basePrice, meteredPrice, meteredXPrice, summary, scheduleForecast] = await Promise.all([
-    stripe.prices.retrieve(prices.base),
+  // Stripe側にまだ実績データが無い（2周期以上先の）月は、予定投稿数から見積もる。
+  // 単発予約（scheduled_posts）の集計は暦月単位のため、周期開始日が属する暦月で近似する
+  // （数ヶ月先の見積もりのため、この程度の近似で許容する）。
+  const [meteredPrice, meteredXPrice, summary, scheduleForecast] = await Promise.all([
     stripe.prices.retrieve(prices.metered, { expand: ["tiers"] }),
     stripe.prices.retrieve(prices.meteredX, { expand: ["tiers"] }),
-    getScheduledPostsSummary(customer.id, prevYear, prevMonth),
-    getScheduleForecastForCustomer(customer.id, prevYear, prevMonth),
+    getScheduledPostsSummary(customer.id, cycleStart.getFullYear(), cycleStart.getMonth() + 1),
+    getScheduleForecastForCustomer(customer.id, cycleStart, cycleEnd),
   ]);
 
-  const basicFee = basePrice.unit_amount || 0;
   const totalCount = summary.totalCount + scheduleForecast.totalCount;
   const xUrlCount = summary.xUrlCount + scheduleForecast.xUrlCount;
   const usageFee = computeGraduatedAmount(meteredPrice.tiers, totalCount);

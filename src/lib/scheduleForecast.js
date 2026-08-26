@@ -1,5 +1,5 @@
 // スケジュール投稿（post_schedules）の将来投稿予定を、実行前にシミュレーションで
-// 見積もる純粋関数。billing.js の請求予測（predictFromScheduledPosts）専用。
+// 見積もる純粋関数。billing.js の請求予測（estimateBillingForecast）専用。
 // 実データ（round_robin_index等）は一切書き換えない。
 const { matchesWeekday, isDateInScheduleRange, getConfiguredSlots, effectiveDailyCount, dateOnly } = require("./scheduleFiring");
 const { containsUrl } = require("./urlDetection");
