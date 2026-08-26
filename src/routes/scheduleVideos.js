@@ -54,7 +54,7 @@ router.post(
   }
 );
 
-router.get("/api/schedules/:id/texts/videos/jobs/:jobId", requireAuth, async (req, res) => {
+router.get("/api/schedules/:id/texts/videos/jobs/:jobId", requireAuth, blockViewerRole, async (req, res) => {
   const schedule = await loadOwnedSchedule(req, res);
   if (!schedule) return;
   const job = getJob(req.params.jobId);

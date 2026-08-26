@@ -105,7 +105,7 @@ async function cancelPendingGeneratedPosts(scheduleId) {
   return pending.length;
 }
 
-router.get("/api/schedules", requireAuth, async (req, res) => {
+router.get("/api/schedules", requireAuth, blockViewerRole, async (req, res) => {
   try {
     const schedules = await scheduleStore.listSchedulesForCustomer(req.customer.id);
     schedules.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
@@ -159,7 +159,7 @@ router.post("/api/schedules", requireAuth, requireVerified, blockExpiredTrial, b
   }
 });
 
-router.get("/api/schedules/:id", requireAuth, async (req, res) => {
+router.get("/api/schedules/:id", requireAuth, blockViewerRole, async (req, res) => {
   try {
     const schedule = await scheduleStore.getScheduleById(req.params.id);
     if (!schedule || schedule.customer_code !== req.customer.id) {
@@ -260,7 +260,7 @@ async function loadOwnedSchedule(req, res) {
   return schedule;
 }
 
-router.get("/api/schedules/:id/texts", requireAuth, async (req, res) => {
+router.get("/api/schedules/:id/texts", requireAuth, blockViewerRole, async (req, res) => {
   try {
     const schedule = await loadOwnedSchedule(req, res);
     if (!schedule) return;

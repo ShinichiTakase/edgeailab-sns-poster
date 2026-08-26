@@ -1,6 +1,6 @@
 const express = require("express");
 const customerStore = require("../lib/customerStore");
-const { requireAuth } = require("../middleware/requireAuth");
+const { requireAuth, blockViewerRole } = require("../middleware/requireAuth");
 const { getXSurcharge } = require("../lib/surchargeConfig");
 const { getStripe, ensureStripeCustomer } = require("../lib/stripeClient");
 const { planKey, pricesForPlan } = require("../lib/stripePricing");
@@ -90,7 +90,7 @@ router.post("/api/billing/create-checkout-session", requireAuth, express.json(),
 
 // プラン変更（アップグレードのみ）。認証済みセッションのcustomer自身が対象であり、
 // リクエストボディでcustomerIdを受け取ることはない（=なりすまし変更は構造上不可能）。
-router.post("/api/billing/change-plan", requireAuth, express.json(), async (req, res) => {
+router.post("/api/billing/change-plan", requireAuth, blockViewerRole, express.json(), async (req, res) => {
   const { targetPlan } = req.body || {};
   if (!PLAN_ORDER.includes(targetPlan)) {
     return res.status(400).json({ error: "invalid_target_plan", message: "指定されたプランが不正です。" });
@@ -210,6 +210,17 @@ function requireAdminRole(req, res) {
   return true;
 }
 
+// カード一覧の閲覧のみ、閲覧者ロールにも許可する（表示専用。追加・削除・入替は
+// 引き続きrequireAdminRoleで管理者限定のまま）。
+function requireAdminOrViewerRole(req, res) {
+  const role = customerStore.roleOf(req.user);
+  if (role !== "管理者" && role !== "閲覧者") {
+    res.status(403).json({ error: "forbidden", message: "お支払い方法の確認はアカウント管理者のみ実行できます。" });
+    return false;
+  }
+  return true;
+}
+
 // Stripe.js（Stripe Elements）が使う公開可能キー。個人情報を含まないため認証不要
 // （x-surchargeと同じ公開設定エンドポイント）。
 router.get("/api/billing/stripe-publishable-key", (req, res) => {
@@ -297,7 +308,7 @@ router.post("/api/billing/payment-methods/confirm", requireAuth, express.json(),
 });
 
 router.get("/api/billing/payment-methods", requireAuth, async (req, res) => {
-  if (!requireAdminRole(req, res)) return;
+  if (!requireAdminOrViewerRole(req, res)) return;
   if (!req.customer.stripeCustomerId) {
     return res.json({ cards: [] });
   }

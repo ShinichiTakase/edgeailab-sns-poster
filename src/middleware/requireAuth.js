@@ -151,6 +151,16 @@ function blockViewerRole(req, res, next) {
   next();
 }
 
+// blockViewerRoleのJSON 403版はfetch経由のAPI向け。/oauth/*/startはブラウザの
+// 直接ナビゲーション（<a href>クリック）で叩かれるGETルートのため、blockExpiredTrialや
+// requireSnsConnectionAvailableと同じ「生JSONを画面に出さずredirectする」流儀に合わせる。
+function blockViewerRoleRedirect(req, res, next) {
+  if (roleOf(req.user) === "閲覧者") {
+    return res.redirect("/onboarding.html");
+  }
+  next();
+}
+
 module.exports = {
   requireAuth,
   requireVerified,
@@ -158,6 +168,7 @@ module.exports = {
   requireUnderTrialPostLimit,
   blockCanceledCustomer,
   blockViewerRole,
+  blockViewerRoleRedirect,
   readSessionToken,
   parseCookieHeader,
 };

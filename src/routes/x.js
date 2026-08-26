@@ -2,7 +2,7 @@ const express = require("express");
 const crypto = require("crypto");
 const { savePlatformTokens, findDuplicateOwner } = require("../lib/tokenStore");
 const pkceStore = require("../lib/pkceStore");
-const { requireAuth, blockExpiredTrial } = require("../middleware/requireAuth");
+const { requireAuth, blockExpiredTrial, blockViewerRoleRedirect } = require("../middleware/requireAuth");
 const { requireSnsConnectionAvailable } = require("../middleware/snsConnectionGuard");
 
 const router = express.Router();
@@ -38,7 +38,7 @@ const USERS_ME_URL = "https://api.x.com/2/users/me";
 // 使うには再連携（このOAuthフローのやり直し）が必要（refresh tokenだけでは新スコープは付与されない）。
 const SCOPE = "tweet.read tweet.write users.read offline.access media.write";
 
-router.get("/oauth/x/authorize", requireAuth, blockExpiredTrial, requireSnsConnectionAvailable("x"), (req, res) => {
+router.get("/oauth/x/authorize", requireAuth, blockExpiredTrial, blockViewerRoleRedirect, requireSnsConnectionAvailable("x"), (req, res) => {
   const slug = req.customer.id;
 
   const codeVerifier = crypto.randomBytes(64).toString("base64url");
