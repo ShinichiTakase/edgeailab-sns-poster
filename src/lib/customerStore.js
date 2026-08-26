@@ -216,7 +216,13 @@ function roleOf(user) {
   return Array.isArray(user.role) ? user.role[0] : user.role;
 }
 function invitationStatusOf(user) {
-  return Array.isArray(user.invitationStatus) ? user.invitationStatus[0] : user.invitationStatus;
+  const status = Array.isArray(user.invitationStatus) ? user.invitationStatus[0] : user.invitationStatus;
+  // サインアップ時に作られる唯一の初期要素（オーナー・users[0]）は招待フローを
+  // 経ていないためinvitationStatusフィールド自体を持たない。実態としては
+  // 常に「承諾済み」相当なので、未設定時はデフォルトで「承諾済み」を返す
+  // （2026-08-27: 管理者を承認者候補に含める際、この未設定判定が原因で
+  // オーナーだけが候補から漏れていた不具合の修正）。
+  return status || "承諾済み";
 }
 
 /**
