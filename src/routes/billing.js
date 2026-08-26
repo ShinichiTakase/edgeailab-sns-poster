@@ -706,7 +706,15 @@ async function getScheduleForecastForCustomer(customerId, year, month) {
 // 請求ゼロ、本稼働開始月は基本料金のみ、それ以降は基本料金＋前月分の従量料金・
 // Xサーチャージ（後払い方式）を予測する。
 async function predictFromScheduledPosts(stripe, customer, prices, year, month) {
-  const activation = getActivationYearMonth(customer);
+  // customer.trialEndsAtは決済登録（Checkout完了）後もクリアされずそのまま残るため、
+  // 既にstripeSubscriptionIdを持つ（=本稼働済みの）顧客にgetActivationYearMonth()を
+  // 適用すると、trialEndsAtの属する月より前のカレンダー月を常に「トライアル中」と
+  // 誤判定してしまう。実際の請求サイクル（billing_cycle_anchor）とカレンダー月がずれて
+  // tryUpcomingInvoiceAmountsの対象外になった月（例:
+  // 請求サイクルが毎月25日始まりの顧客が当月分を見る場合）で、既に課金中にもかかわらず
+  // 請求予測が基本料金含め全項目0円になる不具合があった（実機で確認、2026-08-26）。
+  // トライアル未消化（＝まだCheckout未完了）の顧客にのみこの判定を適用する。
+  const activation = customer.stripeSubscriptionId ? null : getActivationYearMonth(customer);
   if (activation) {
     const targetKey = year * 12 + month;
     const activationKey = activation.year * 12 + activation.month;
