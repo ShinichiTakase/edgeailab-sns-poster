@@ -5,14 +5,7 @@ const { getXSurcharge } = require("../lib/surchargeConfig");
 const { getStripe, ensureStripeCustomer } = require("../lib/stripeClient");
 const { planKey, pricesForPlan } = require("../lib/stripePricing");
 const { computeGraduatedAmount } = require("../lib/stripeTierPricing");
-const {
-  getBillingCycleAnchor,
-  addStripeStyleMonths,
-  findCycleIndexForMonth,
-  findNextUnbilledCycleIndex,
-  getCombinedPostCounts,
-} = require("../lib/billingCycle");
-const { parseMonthParam, isPastMonth } = require("../lib/monthParam");
+const { getCurrentBillingCycle, getCombinedPostCounts } = require("../lib/billingCycle");
 const { resolvePriorities, findPrimary, findBackup } = require("../lib/paymentMethodPriority");
 const { BACKUP_CARD_CHARGED_EMAIL } = require("../lib/emailTemplates");
 const { sendCustomerMail } = require("../lib/customerMailer");
@@ -601,15 +594,9 @@ router.post("/api/billing/webhook", express.raw({ type: "application/json" }), a
 
 // customerIdはクエリパラメータではなく、他のbilling系エンドポイント同様
 // requireAuthが設定するreq.customer.id（認証済み本人のみ）を使う（IDOR対策）。
+// 月選択パラメータは持たない（2026-08-26設計変更）。「次回いくら支払うか」を知るための
+// 機能であり、常に「今、進行中の1周期」だけを対象にする。
 router.get("/api/billing/upcoming", requireAuth, async (req, res) => {
-  const parsed = parseMonthParam(req.query.month);
-  if (!parsed) {
-    return res.status(400).json({ error: "invalid_month" });
-  }
-  if (isPastMonth(parsed.year, parsed.month)) {
-    return res.status(400).json({ error: "month_in_past" });
-  }
-
   const stripe = getStripe();
   if (!stripe) {
     return res.status(500).json({ error: "stripe_not_configured" });
@@ -623,7 +610,7 @@ router.get("/api/billing/upcoming", requireAuth, async (req, res) => {
   }
 
   try {
-    const forecast = await estimateBillingForecast(stripe, req.customer, prices, parsed.year, parsed.month);
+    const forecast = await estimateBillingForecast(stripe, req.customer, prices);
     res.json({ ...forecast, isEstimate: true });
   } catch (err) {
     console.error(`[billing/upcoming] failed customerId=${req.customer.id}:`, err);
@@ -631,61 +618,50 @@ router.get("/api/billing/upcoming", requireAuth, async (req, res) => {
   }
 });
 
-// ダッシュボードの月選択プルダウン（ご請求予測・投稿予定）の開始年月を返す。
-// 既に決済済みの周期は選択肢に出す意味が無い（「次回いくら支払うか」を知るための機能のため）
-// ので、まだ決済されていない直近の周期を指す年月を返す（2026-08-26追加）。
-router.get("/api/billing/next-cycle", requireAuth, async (req, res) => {
-  const stripe = getStripe();
-  if (!stripe) {
-    return res.status(500).json({ error: "stripe_not_configured" });
+// 「今、進行中の周期」の請求を予測する。基本料金＝次回決算日から始まる次周期分（先払い、
+// 「yyyy年mm月分」のラベル用にbasicFeePeriodも返す）。従量料金・Xサーチャージ＝
+// billingCycle.getCombinedPostCounts（前回決算日〜今日の実績＋今日〜次回決算日の予定を
+// 合算した件数）を、StripeのPrice tiers（単一の情報源）に当てはめて算出する（後払い＋予測）。
+// まだ一度も決済していない（本稼働前、cycleStart=null）場合は基本料金のみ。
+async function estimateBillingForecast(stripe, customer, prices) {
+  const cycle = await getCurrentBillingCycle(stripe, customer);
+  if (!cycle) {
+    return { basicFee: 0, usageFee: 0, xSurcharge: 0, total: 0, periodStart: null, periodEnd: null, basicFeePeriod: null };
   }
-  try {
-    const anchor = await getBillingCycleAnchor(stripe, req.customer);
-    if (!anchor) {
-      const now = new Date();
-      return res.json({ year: now.getFullYear(), month: now.getMonth() + 1 });
-    }
-    const n = findNextUnbilledCycleIndex(anchor, new Date());
-    const cycleDate = addStripeStyleMonths(anchor, n);
-    res.json({ year: cycleDate.getFullYear(), month: cycleDate.getMonth() + 1 });
-  } catch (err) {
-    console.error(`[billing/next-cycle] failed customerId=${req.customer.id}:`, err);
-    res.status(500).json({ error: "internal_error" });
-  }
-});
-
-// 指定カレンダー月に決済日が来る請求を予測する。基本料金＝その決済日から始まる次周期分
-// （先払い）、従量料金・Xサーチャージ＝直前の決済日からこの決済日までの投稿分（後払い）。
-// 本稼働前（周期番号n<0）は請求ゼロ、最初の決済（n=0）は基本料金のみ（従量分の対象期間が
-// 存在しないため）。n>=1は、その周期のうち今日までの実績（posting_logs）＋今日から
-// 決済日までの予測（scheduled_posts・post_schedulesのシミュレーション）を合算した件数に、
-// StripeのPrice tiers（単一の情報源）を当てはめて算出する（2026-08-26改修。「次回いくら
-// 支払うか」を知る機能のため、今日時点の実績と、現在のスケジュールを続けた場合の予測を
-// 合算して示す）。
-async function estimateBillingForecast(stripe, customer, prices, year, month) {
-  const anchor = await getBillingCycleAnchor(stripe, customer);
-  if (!anchor) return { basicFee: 0, usageFee: 0, xSurcharge: 0, total: 0 };
-
-  const n = findCycleIndexForMonth(anchor, year, month);
-  if (n === null || n < 0) return { basicFee: 0, usageFee: 0, xSurcharge: 0, total: 0 };
 
   const basePrice = await stripe.prices.retrieve(prices.base);
   const basicFee = basePrice.unit_amount || 0;
+  const basicFeePeriod = { year: cycle.cycleEnd.getFullYear(), month: cycle.cycleEnd.getMonth() + 1 };
 
-  if (n === 0) return { basicFee, usageFee: 0, xSurcharge: 0, total: basicFee };
-
-  const cycleStart = addStripeStyleMonths(anchor, n - 1);
-  const cycleEnd = addStripeStyleMonths(anchor, n);
+  if (!cycle.cycleStart) {
+    return {
+      basicFee,
+      usageFee: 0,
+      xSurcharge: 0,
+      total: basicFee,
+      periodStart: null,
+      periodEnd: cycle.cycleEnd.toISOString(),
+      basicFeePeriod,
+    };
+  }
 
   const [meteredPrice, meteredXPrice, combined] = await Promise.all([
     stripe.prices.retrieve(prices.metered, { expand: ["tiers"] }),
     stripe.prices.retrieve(prices.meteredX, { expand: ["tiers"] }),
-    getCombinedPostCounts(customer, cycleStart, cycleEnd),
+    getCombinedPostCounts(customer, cycle.cycleStart, cycle.cycleEnd),
   ]);
 
   const usageFee = computeGraduatedAmount(meteredPrice.tiers, combined.totalCount);
   const xSurcharge = computeGraduatedAmount(meteredXPrice.tiers, combined.xUrlCount);
-  return { basicFee, usageFee, xSurcharge, total: basicFee + usageFee + xSurcharge };
+  return {
+    basicFee,
+    usageFee,
+    xSurcharge,
+    total: basicFee + usageFee + xSurcharge,
+    periodStart: cycle.cycleStart.toISOString(),
+    periodEnd: cycle.cycleEnd.toISOString(),
+    basicFeePeriod,
+  };
 }
 
 // handleInvoicePaymentFailedはExpressルートには直接ならない内部関数だが、

@@ -1,12 +1,16 @@
-// Stripeの実請求サイクル（billing_cycle_anchor）に基づく「月」「投稿数」の共通ロジック。
-// ご請求予測（billing.js）・投稿予定（posts.js）の両方で使う（2026-08-26新設）。
+// Stripeの実請求サイクル（billing_cycle_anchor）に基づく「決算期間」「投稿数」の共通ロジック。
+// ダッシュボードの「投稿実績」「ご請求予測」両ウィジェットが、この1ファイルの
+// getCurrentBillingCycle/getCombinedPostCountsだけを参照する（重複定義防止、2026-08-26新設）。
 //
-// 「月」はカレンダー月ではなく、決済日を境界とする周期として扱う。基本料金は先払い
-// （決済日にその日から始まる次周期分を課金）。投稿数（従量料金・Xサーチャージ・投稿予定
-// 表示の元になる件数）は「直近の決済日〜今回の決済日」の実績＋予測の合算として扱う:
-// - 既に経過した分（周期開始〜今日）は実行済み投稿（posting_logs）の実績
-// - まだ経過していない分（今日〜周期終了）は、現在のスケジュール設定が続いた場合の予測
+// カレンダー月ではなく、決算日（決済日）を境界とする「今、進行中の周期」だけを対象にする
+// （両ウィジェットとも月選択プルダウンは持たない）。投稿数（従量料金・Xサーチャージ予測・
+// 投稿実績の元になる件数）は次の1本の式に統一する:
+//   予測投稿数 = 実績投稿数（前回決算日～今日）＋ 予定投稿数（今日～次回決算日、現在の
+//                スケジュール設定が続いた場合）
+// - 実績（前回決算日〜今日）: 実行済みステータスの投稿（posting_logs）
+// - 予定（今日〜次回決算日）: 未実行かつスケジュール設定済みの投稿
 //   （単発予約=scheduled_posts ＋ 繰り返しスケジュール=post_schedulesのシミュレーション）
+// 「今日」を境に実績/予定を排他的に分けることで、同一投稿の二重計上を防ぐ。
 const { getScheduledPostsSummary } = require("./scheduledPostStore");
 const { getActualPostCounts } = require("./postingLogStore");
 const { listSchedulesForCustomer } = require("./scheduleStore");
@@ -66,24 +70,28 @@ function addStripeStyleMonths(anchor, n) {
   return base;
 }
 
-// 指定したカレンダー年月に決済日が属する周期番号nを求める（n=0が最初の決済＝本稼働開始日、
-// nがnullなら対象月に決済日が存在しない＝範囲外）。月次サイクルのため該当月には必ず
-// ちょうど1つの決済日が存在する前提で、概算位置の前後1周期のみ確認すれば十分。
-function findCycleIndexForMonth(anchor, year, month) {
-  const approx = year * 12 + (month - 1) - (anchor.getFullYear() * 12 + anchor.getMonth());
-  for (const n of [approx - 1, approx, approx + 1]) {
-    const d = addStripeStyleMonths(anchor, n);
-    if (d.getFullYear() === year && d.getMonth() === month - 1) return n;
-  }
-  return null;
-}
-
 // まだ決済が完了していない直近の周期番号を求める（決済日が現在時刻以降の最小のn）。
 // 本稼働前（トライアル中）の顧客はn=0（最初の決済がまだ先）がそのまま該当する。
 function findNextUnbilledCycleIndex(anchor, now) {
   let n = 0;
   while (addStripeStyleMonths(anchor, n) <= now) n += 1;
   return n;
+}
+
+// 「今、進行中の周期」の境界を求める。投稿実績・ご請求予測の両ウィジェットが必ずこの
+// 関数経由で周期を取得することで、周期の求め方を1箇所に集約する。
+// @returns {{ n: number, cycleStart: Date|null, cycleEnd: Date }|null}
+//   cycleStart=null は「まだ一度も決済していない（本稼働前）」ことを示す
+//   （前回決算日が存在しないため）。nullそのもの（戻り値全体）は、アンカーが
+//   全く定まらない（サブスクリプションもtrialEndsAtも無い）異常系のみ。
+async function getCurrentBillingCycle(stripe, customer) {
+  const anchor = await getBillingCycleAnchor(stripe, customer);
+  if (!anchor) return null;
+  const now = new Date();
+  const n = findNextUnbilledCycleIndex(anchor, now);
+  const cycleEnd = addStripeStyleMonths(anchor, n);
+  const cycleStart = n === 0 ? null : addStripeStyleMonths(anchor, n - 1);
+  return { n, cycleStart, cycleEnd };
 }
 
 // 対象期間内で、この顧客の全スケジュール投稿（post_schedules）が生成するはずの投稿予定を
@@ -118,9 +126,6 @@ async function getCombinedPostCounts(customer, windowStart, windowEnd) {
 }
 
 module.exports = {
-  getBillingCycleAnchor,
-  addStripeStyleMonths,
-  findCycleIndexForMonth,
-  findNextUnbilledCycleIndex,
+  getCurrentBillingCycle,
   getCombinedPostCounts,
 };
