@@ -16,7 +16,7 @@ const {
 } = require("../lib/postingLogStore");
 const { createScheduledPost, listAllScheduledPostsForCustomer } = require("../lib/scheduledPostStore");
 const { getStripe } = require("../lib/stripeClient");
-const { getCurrentBillingCycle } = require("../lib/billingCycle");
+const { getCurrentBillingCycle, getProjectedPostCounts } = require("../lib/billingCycle");
 const retryStore = require("../lib/scheduledPostRetryStore");
 const postingLogOriginStore = require("../lib/postingLogOriginStore");
 const approvalStore = require("../lib/approvalStore");
@@ -493,6 +493,41 @@ router.get("/api/posts/stats", requireAuth, async (req, res) => {
     res.json({ counts: counts.counts, periodStart: cycle.cycleStart.toISOString(), periodEnd: now.toISOString() });
   } catch (err) {
     console.error(`[posts/stats] failed customerId=${req.customer.id}:`, err);
+    res.status(500).json({ error: "internal_error" });
+  }
+});
+
+// customerIdはクエリパラメータではなく、他の /api/posts/* 同様requireAuthが設定する
+// req.customer.id（認証済み本人のみ）を使う（IDOR対策）。
+//
+// 月選択パラメータは持たない。常に「今、進行中の周期」の予定（今日〜次回決算日、
+// 未実行かつスケジュール設定済みの投稿のみ）を返す（2026-08-26復活。billing.jsの
+// /api/billing/upcomingと同じbillingCycle.getCurrentBillingCycle/getProjectedPostCounts
+// を使い、周期・投稿数の求め方を1箇所に集約）。
+router.get("/api/posts/scheduled", requireAuth, async (req, res) => {
+  const stripe = getStripe();
+  if (!stripe) {
+    return res.status(500).json({ error: "stripe_not_configured" });
+  }
+
+  const emptyCounts = { x: 0, threads: 0, facebook: 0, instagram: 0, linkedin: 0 };
+
+  try {
+    const cycle = await getCurrentBillingCycle(stripe, req.customer);
+    if (!cycle) {
+      return res.json({ counts: emptyCounts, xUrlCount: 0, periodStart: null, periodEnd: null });
+    }
+
+    const now = new Date();
+    const projected = await getProjectedPostCounts(req.customer, now, cycle.cycleEnd);
+    res.json({
+      counts: projected.counts,
+      xUrlCount: projected.xUrlCount,
+      periodStart: now.toISOString(),
+      periodEnd: cycle.cycleEnd.toISOString(),
+    });
+  } catch (err) {
+    console.error(`[posts/scheduled] failed customerId=${req.customer.id}:`, err);
     res.status(500).json({ error: "internal_error" });
   }
 });

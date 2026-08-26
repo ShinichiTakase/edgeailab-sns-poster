@@ -1,6 +1,7 @@
 // Stripeの実請求サイクル（billing_cycle_anchor）に基づく「決算期間」「投稿数」の共通ロジック。
-// ダッシュボードの「投稿実績」「ご請求予測」両ウィジェットが、この1ファイルの
-// getCurrentBillingCycle/getCombinedPostCountsだけを参照する（重複定義防止、2026-08-26新設）。
+// ダッシュボードの「投稿実績」「投稿予定」「ご請求予測」の3ウィジェットが、この1ファイルの
+// getCurrentBillingCycle/getProjectedPostCounts/getCombinedPostCountsだけを参照する
+// （重複定義防止、2026-08-26新設）。
 //
 // カレンダー月ではなく、決算日（決済日）を境界とする「今、進行中の周期」だけを対象にする
 // （両ウィジェットとも月選択プルダウンは持たない）。投稿数（従量料金・Xサーチャージ予測・
@@ -107,25 +108,37 @@ async function getScheduleForecastForCustomer(customerId, windowStart, windowEnd
   return mergeCounts(...parts);
 }
 
-// windowStart〜windowEndの投稿数を、実績（今日まで。posting_logs）＋予測（今日から先。
-// 単発予約=scheduled_posts＋繰り返しスケジュールのシミュレーション）で合算する。
-// windowStartが未来（周期全体が未来）なら実績部分は自動的に空になり、windowEndが過去
-// （周期が既に終わっている）なら予測部分は自動的に空になる。
+// windowStart〜windowEndに「現在のスケジュール設定が続いた場合」発生するはずの予定投稿数を
+// 求める（未実行かつスケジュール設定済みの投稿のみが対象。実行済みは含まない）。
+// 単発予約（scheduled_posts）＋繰り返しスケジュール（post_schedulesのシミュレーション）の
+// 合算。投稿予定ウィジェット単体表示・ご請求予測の合算計算の両方がこの関数を参照する。
+async function getProjectedPostCounts(customer, windowStart, windowEnd) {
+  if (!(windowStart < windowEnd)) return emptyCounts();
+  const [oneOff, recurring] = await Promise.all([
+    getScheduledPostsSummary(customer.id, windowStart, windowEnd),
+    getScheduleForecastForCustomer(customer.id, windowStart, windowEnd),
+  ]);
+  return mergeCounts(oneOff, recurring);
+}
+
+// windowStart〜windowEndの投稿数を、実績（今日まで。posting_logs）＋予定（今日から先。
+// getProjectedPostCounts）で合算する。windowStartが未来（周期全体が未来）なら実績部分は
+// 自動的に空になり、windowEndが過去（周期が既に終わっている）なら予定部分は自動的に空になる。
 async function getCombinedPostCounts(customer, windowStart, windowEnd) {
   const now = new Date();
   const actualEnd = now < windowEnd ? now : windowEnd;
   const projectedStart = now > windowStart ? now : windowStart;
 
-  const [actual, oneOff, recurring] = await Promise.all([
+  const [actual, projected] = await Promise.all([
     actualEnd > windowStart ? getActualPostCounts(customer.id, windowStart, actualEnd) : emptyCounts(),
-    projectedStart < windowEnd ? getScheduledPostsSummary(customer.id, projectedStart, windowEnd) : emptyCounts(),
-    projectedStart < windowEnd ? getScheduleForecastForCustomer(customer.id, projectedStart, windowEnd) : emptyCounts(),
+    getProjectedPostCounts(customer, projectedStart, windowEnd),
   ]);
 
-  return mergeCounts(actual, oneOff, recurring);
+  return mergeCounts(actual, projected);
 }
 
 module.exports = {
   getCurrentBillingCycle,
+  getProjectedPostCounts,
   getCombinedPostCounts,
 };
