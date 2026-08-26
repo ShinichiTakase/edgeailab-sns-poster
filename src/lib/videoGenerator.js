@@ -182,6 +182,61 @@ function easeOutCubic(t) {
   return 1 - Math.pow(1 - t, 3);
 }
 
+// ---------- タイトル（開始直後0.5秒間、プロフィールグリッドのサムネイルに表示される
+// 0フレーム目を含む区間）----------
+// キャプション本文とは別のタイトルフィールドはデータモデルに存在しないため、本文の
+// 先頭段落（改行区切りの最初のまとまり）を抜き出してタイトルとして使う。
+const TITLE_MAX_LINES = 2;
+
+function extractTitleSource(captionText) {
+  const firstParagraph = (captionText || "").split(/\n+/).find((p) => p.trim().length > 0) || "";
+  return firstParagraph.trim();
+}
+
+// 本文用のwrapCaption/fitCaptionと同じ縮小ロジックだが、1〜2行に収まるまで縮小する点が
+// 異なる（タイトルは短い見出しとして表示するため、本文より大きいフォントサイズから始める）。
+// 最小サイズでも2行に収まらない場合は、末尾を省略記号で切り詰める。
+function fitTitle(ctx, text, maxWidth) {
+  let fontSize = 108;
+  const minSize = 56;
+  let lines = wrapCaption(ctx, text, maxWidth, fontSize);
+  let lineHeight = Math.round(fontSize * 1.3);
+  while (fontSize > minSize && lines.length > TITLE_MAX_LINES) {
+    fontSize -= 6;
+    lines = wrapCaption(ctx, text, maxWidth, fontSize);
+    lineHeight = Math.round(fontSize * 1.3);
+  }
+  if (lines.length > TITLE_MAX_LINES) {
+    lines = lines.slice(0, TITLE_MAX_LINES);
+    const last = lines[TITLE_MAX_LINES - 1];
+    lines[TITLE_MAX_LINES - 1] = last.length > 1 ? `${last.slice(0, -1)}…` : last;
+  }
+  return { lines, fontSize, lineHeight };
+}
+
+// holdT: 0（開始）→1（ホールド区間の終端＝本文アニメーション開始点）。終盤30%
+// （0.5秒中の約0.15秒）でフェードアウトし、本文アニメーションが始まる時点では
+// 完全に透明になっているようにする。
+function drawTitle(ctx, { lines, fontSize, lineHeight, textColor, holdT }) {
+  const fadeStart = 0.7;
+  const opacity = holdT < fadeStart ? 1 : Math.max(0, 1 - (holdT - fadeStart) / (1 - fadeStart));
+
+  ctx.save();
+  ctx.globalAlpha = opacity;
+  ctx.font = `bold ${fontSize}px ${FONT_FAMILY}`;
+  ctx.fillStyle = textColor;
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  const blockHeight = lines.length * lineHeight;
+  // 「画面の中央」という要件のため、本文用のCAPTION_AREA（フッター分だけ下マージンを
+  // 広く取った領域）ではなく、フレーム全体の中央（HEIGHT/2）を基準にする。
+  const startY = HEIGHT / 2 - blockHeight / 2 + lineHeight / 2;
+  lines.forEach((line, idx) => {
+    ctx.fillText(line, WIDTH / 2, startY + idx * lineHeight);
+  });
+  ctx.restore();
+}
+
 // ---------- フレーム描画 ----------
 
 // 上下マージンを420→320/360に詰め、キャプションが使える高さを1080→1240pxに拡張した
@@ -314,6 +369,7 @@ async function renderVideo({ captionText, outPath, signal }) {
     CAPTION_AREA.bottom - CAPTION_AREA.top
   );
   const drawCaption = DRAWERS[animation];
+  const titleFit = fitTitle(ctx, extractTitleSource(captionText), CAPTION_AREA.right - CAPTION_AREA.left);
 
   const __renderT0 = Date.now();
   await new Promise((resolve, reject) => {
@@ -366,7 +422,12 @@ async function renderVideo({ captionText, outPath, signal }) {
           ctx.fillStyle = style.accentColorHex;
           ctx.fillRect(0, 0, WIDTH, HEIGHT);
 
-          if (frame >= HOLD_FRAMES && frame < TOTAL_FRAMES - HOLD_FRAMES) {
+          if (frame < HOLD_FRAMES) {
+            // 開始直後0.5秒間（0フレーム目＝プロフィールグリッドのサムネイルを含む）は
+            // タイトルを画面中央に静止表示し、区間の終盤でフェードアウトする。
+            const holdT = frame / HOLD_FRAMES;
+            drawTitle(ctx, { ...titleFit, textColor, holdT });
+          } else if (frame < TOTAL_FRAMES - HOLD_FRAMES) {
             const activeT = (frame - HOLD_FRAMES) / ACTIVE_FRAMES;
             drawCaption(ctx, { lines, fontSize, lineHeight, textColor, activeT });
           }
