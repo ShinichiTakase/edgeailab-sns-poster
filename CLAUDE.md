@@ -112,6 +112,30 @@ scheduled_postsが0件」という状態に入ると、支払い方法登録済�
 `src/lib/mailer.js`（`notifyFailure`、社内運用向けの障害通知専用・別経路）には
 付与していない。
 
+## 孤児化SNS連携トークンの検知（cron、2026-08-26追加）
+`sns-poster-orphan-sns-token-check`
+（[src/scripts/orphanSnsTokenCheck.js](src/scripts/orphanSnsTokenCheck.js)）も同様に
+`profiles: manual`サービス。`json/client_tokens.json`はcustomersレコードの削除と連動しない
+独立ストアのため、**microCMS管理画面からcustomersレコードを直接削除するとトークンだけが
+孤児化して残り**、同じSNSアカウントを正しい持ち主が再連携しようとした際に
+`findDuplicateOwner`が誤って「他アカウントが使用中」と判定し`/upgrade.html?reason=
+duplicate_account`へブロックしてしまう不具合が実機で発生した（2026-08-26、
+info@108teaworks.com/id: k22n7qwhimx）。正規の解約導線（`POST /api/account/cancel`）は
+トークンも連動して削除するため発生しない。**customersレコードの削除は必ずアプリの解約機能
+（顧客自身によるセルフサービス）経由で行い、microCMS管理画面から直接削除しないこと。**
+sns-poster自体には運営者向けの管理GUIは存在しない。
+
+このcronは`client_tokens.json`の全slugについてcustomersレコードの実在をmicroCMSに
+問い合わせ、孤児が見つかったらログ記録＋メール通知する（自動削除はしない）。実際の
+crontab登録は`/etc/cron.d/edgeailab-net-orphan-sns-token-check`に日次（毎日**5時**）で
+実施済み。登録例：
+
+```
+0 5 * * * cd /opt/project/deploy/xserver-vps && docker compose run --rm sns-poster-orphan-sns-token-check
+```
+
+詳細は[docs/内部仕様_SNS連携.md](docs/内部仕様_SNS連携.md)参照。
+
 ## Instagram Reels投稿の削除不可
 Instagram Graph APIは公開済みメディアの削除エンドポイントを提供していない
 （`DELETE /{media-id}`は`Unsupported delete request`エラーになる。実機検証済み、

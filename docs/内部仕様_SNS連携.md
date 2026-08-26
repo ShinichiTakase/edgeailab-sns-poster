@@ -208,6 +208,30 @@ Facebook/Instagram/ThreadsはいずれもMeta審査上のDev Mode制限（許可
 - `accountNameFor`: 投稿ログの`account_name`表示にも使う共通ロジック
   （Facebookは全ページ名をカンマ区切り連結、他は`username || user_id`）
 
+### 孤児化トークンによるduplicate_account誤検知（2026-08-26発生・対策済み）
+
+`client_tokens.json`はcustomersレコードの削除・状態変更と連動しない独立ストア。
+正規の解約導線（`POST /api/account/cancel`）は`deletePlatformTokensBySlug`で
+トークンも連動して削除するが、**microCMS管理画面からcustomersレコードを直接削除
+した場合はトークンだけが孤児化して残る**。孤児化したslug（実体は`req.customer.id`）が
+`findDuplicateOwner`に居座り続けると、同じSNSアカウントを正しい持ち主が再連携
+しようとしても「他アカウントが既に使用中」と誤判定され、`/upgrade.html?reason=
+duplicate_account`へブロックされる（実機発生: 2026-08-26、info@108teaworks.com/
+id: k22n7qwhimx。過去にmicroCMS管理画面から直接削除された`id: 108teaworks`の
+トークンが残っていたことが原因。手動でslugを付け替えて復旧）。
+
+再発防止として`src/scripts/orphanSnsTokenCheck.js`を追加。`client_tokens.json`の
+全slugについてcustomersレコードの実在をmicroCMSに問い合わせ、存在しないslugが
+見つかったらログ記録＋メール通知する（自動削除はしない。誤検知で実データを失わない
+よう判断と削除は人間が行う）。`docker compose run --rm sns-poster-orphan-sns-token-check`
+で日次（毎日5時）起動、実際のcrontab登録は`/etc/cron.d/edgeailab-net-orphan-sns-token-check`
+に実施済み。
+
+**根本的な再発防止には、customersレコードの削除は必ずアプリの解約機能
+（プロフィールメニュー「解約」、顧客自身のセルフサービス）経由で行い、microCMS管理画面
+から直接customersレコードを削除しないこと。** sns-poster自体には運営者向けの管理GUIは
+存在しない。
+
 ## プラットフォームごとの保存フィールド
 
 | プラットフォーム | 保存フィールド |
