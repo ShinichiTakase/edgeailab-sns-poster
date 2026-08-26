@@ -63,6 +63,14 @@ router.post("/api/team/invite", requireAuth, requireVerified, express.json(), as
   if (!VALID_ROLES.includes(role)) {
     return res.status(400).json({ error: "invalid_role" });
   }
+  // メインユーザー（アカウント契約者本人。customer.email＝users[0].email）を
+  // メンバーとして招待できてしまうと、既存のusers[0]要素（＝本人の実ログイン
+  // 資格情報）がreissueInvitation/acceptInvitationで上書きされ、role破壊や
+  // userId/passwordHash差し替えによる本人アカウント乗っ取りにつながるため、
+  // 常にusers[]内の重複チェックより先に拒否する。
+  if (email.trim().toLowerCase() === (req.customer.email || "").trim().toLowerCase()) {
+    return res.status(409).json({ error: "cannot_invite_main_user" });
+  }
   let normalizedApproverIds = [];
   if (role === "編集者") {
     if (!Array.isArray(approverIds) || approverIds.length === 0) {
