@@ -82,6 +82,52 @@ async function listPostingLogsForCustomer(customerCode, billingPeriod) {
   return all;
 }
 
+/**
+ * 指定顧客の投稿ログを、投稿日時（posted_at）の範囲で取得する（ページング）。
+ * billing_period（歴月単位）ではなく実際の日時で絞り込む。請求予測・投稿予定の
+ * 「実績（今日まで）」集計専用（billingCycle.js参照）。
+ */
+async function listPostingLogsForCustomerInRange(customerCode, startDate, endDate) {
+  const all = [];
+  const limit = 100;
+  let offset = 0;
+  const filters = [
+    `customer_code[equals]${encodeURIComponent(customerCode)}`,
+    `posted_at[greater_than]${encodeURIComponent(startDate.toISOString())}`,
+    `posted_at[less_than]${encodeURIComponent(endDate.toISOString())}`,
+  ].join("[and]");
+  for (;;) {
+    const res = await microcmsFetch(`/posting_logs?filters=${filters}&limit=${limit}&offset=${offset}`);
+    if (!res.ok) {
+      const text = await res.text().catch(() => "");
+      throw new Error(`[postingLogStore] listPostingLogsForCustomerInRange failed ${res.status} ${text.slice(0, 300)}`);
+    }
+    const json = await res.json();
+    const contents = Array.isArray(json.contents) ? json.contents : [];
+    all.push(...contents);
+    if (contents.length < limit) break;
+    offset += limit;
+  }
+  return all;
+}
+
+/** 指定期間内の実行済み投稿を、scheduledPostStore.getScheduledPostsSummaryと同じ形式
+ * （counts/xUrlCount/totalCount）で集計する。 */
+async function getActualPostCounts(customerCode, startDate, endDate) {
+  const logs = await listPostingLogsForCustomerInRange(customerCode, startDate, endDate);
+  const counts = { x: 0, threads: 0, facebook: 0, instagram: 0, linkedin: 0 };
+  let xUrlCount = 0;
+  for (const log of logs) {
+    const label = Array.isArray(log.platform) ? log.platform[0] : log.platform;
+    const key = Object.keys(PLATFORM_LABELS).find((k) => PLATFORM_LABELS[k] === label);
+    if (!key) continue;
+    counts[key] += 1;
+    if (key === "x" && log.contains_url) xUrlCount += 1;
+  }
+  const totalCount = Object.values(counts).reduce((sum, n) => sum + n, 0);
+  return { counts, xUrlCount, totalCount };
+}
+
 /** 指定顧客の全期間のログを全件取得する（投稿一覧画面用。ページング） */
 async function listAllPostingLogsForCustomer(customerCode) {
   const all = [];
@@ -120,6 +166,8 @@ module.exports = {
   PLATFORM_LABELS,
   createPostingLog,
   listPostingLogsForCustomer,
+  listPostingLogsForCustomerInRange,
   listAllPostingLogsForCustomer,
   getPostStatsForCustomer,
+  getActualPostCounts,
 };

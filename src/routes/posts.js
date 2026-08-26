@@ -15,10 +15,16 @@ const {
   listAllPostingLogsForCustomer,
 } = require("../lib/postingLogStore");
 const {
-  getScheduledPostsSummary,
   createScheduledPost,
   listAllScheduledPostsForCustomer,
 } = require("../lib/scheduledPostStore");
+const { getStripe } = require("../lib/stripeClient");
+const {
+  getBillingCycleAnchor,
+  addStripeStyleMonths,
+  findCycleIndexForMonth,
+  getCombinedPostCounts,
+} = require("../lib/billingCycle");
 const retryStore = require("../lib/scheduledPostRetryStore");
 const postingLogOriginStore = require("../lib/postingLogOriginStore");
 const approvalStore = require("../lib/approvalStore");
@@ -488,6 +494,12 @@ router.get("/api/posts/stats", requireAuth, async (req, res) => {
 // req.customer.id（認証済み本人のみ）を使う。クライアント指定のcustomerIdをそのまま
 // 信用すると他customerのデータを覗けてしまう（IDOR）ため、既存エンドポイントの
 // セキュリティ方針に合わせている。
+//
+// 「月」はカレンダー月ではなくStripeの実請求サイクル（billing_cycle_anchor）基準
+// （billing.js の /api/billing/upcoming と同じ解釈。2026-08-26改修）。cronに登録済みの
+// scheduled_posts件数をそのまま数えるのではなく、対象周期のうち今日までの実績
+// （posting_logs）＋今日から決済日までの予測（scheduled_posts・post_schedulesの
+// シミュレーション、現在のスケジュール設定が続いた場合）を合算して返す。
 router.get("/api/posts/scheduled", requireAuth, async (req, res) => {
   const parsed = parseMonthParam(req.query.month);
   if (!parsed) {
@@ -496,9 +508,28 @@ router.get("/api/posts/scheduled", requireAuth, async (req, res) => {
   if (isPastMonth(parsed.year, parsed.month)) {
     return res.status(400).json({ error: "month_in_past" });
   }
+
+  const stripe = getStripe();
+  if (!stripe) {
+    return res.status(500).json({ error: "stripe_not_configured" });
+  }
+
+  const emptyCounts = { x: 0, threads: 0, facebook: 0, instagram: 0, linkedin: 0 };
+
   try {
-    const summary = await getScheduledPostsSummary(req.customer.id, parsed.year, parsed.month);
-    res.json(summary.counts);
+    const anchor = await getBillingCycleAnchor(stripe, req.customer);
+    if (!anchor) return res.json(emptyCounts);
+
+    const n = findCycleIndexForMonth(anchor, parsed.year, parsed.month);
+    if (n === null || n < 0) return res.json(emptyCounts);
+
+    // n=0（トライアル中でまだ一度も決済していない）はサイクル開始点（前回決済日）が
+    // 定義できないため、今日から初回決済日までの予測分のみとする。
+    const cycleStart = n === 0 ? new Date() : addStripeStyleMonths(anchor, n - 1);
+    const cycleEnd = addStripeStyleMonths(anchor, n);
+
+    const combined = await getCombinedPostCounts(req.customer, cycleStart, cycleEnd);
+    res.json(combined.counts);
   } catch (err) {
     console.error(`[posts/scheduled] failed customerId=${req.customer.id}:`, err);
     res.status(500).json({ error: "internal_error" });

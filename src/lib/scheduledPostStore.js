@@ -14,21 +14,14 @@ const PLATFORM_LABELS = { x: "x", threads: "threads", facebook: "facebook", inst
 // 対象にはしない（変更しないこと。書き換えると積み残っていた過去予約が一斉に実行されてしまう）。
 const SCOPE_CUTOFF_AT = "2026-08-17T22:44:38.000Z";
 
-function monthRange(year, month) {
-  const start = new Date(year, month - 1, 1);
-  const end = new Date(year, month, 1);
-  return { start: start.toISOString(), end: end.toISOString() };
-}
-
-async function listPendingScheduledPosts(customerCode, year, month) {
-  const { start, end } = monthRange(year, month);
+async function listPendingScheduledPosts(customerCode, windowStart, windowEnd) {
   // statusはmicroCMSのセレクトフィールド（配列で書き込まれる。markScheduledPostStatus参照）のため、
   // [equals]では一致せず常に0件になる（実機で確認済み）。配列値に対する一致には[contains]を使う。
   const filters = [
     `customer_code[equals]${encodeURIComponent(customerCode)}`,
     `status[contains]pending`,
-    `scheduled_at[greater_than]${encodeURIComponent(start)}`,
-    `scheduled_at[less_than]${encodeURIComponent(end)}`,
+    `scheduled_at[greater_than]${encodeURIComponent(windowStart.toISOString())}`,
+    `scheduled_at[less_than]${encodeURIComponent(windowEnd.toISOString())}`,
   ].join("[and]");
 
   const all = [];
@@ -71,11 +64,13 @@ async function listAllScheduledPostsForCustomer(customerCode) {
 }
 
 /**
- * 指定顧客・指定月のpending予約投稿を集計する。
+ * 指定顧客・指定期間のpending予約投稿を集計する。
+ * @param {Date} windowStart 含む
+ * @param {Date} windowEnd 含まない
  * @returns {{ counts: {x:number,threads:number,facebook:number,instagram:number}, xUrlCount: number, totalCount: number }}
  */
-async function getScheduledPostsSummary(customerCode, year, month) {
-  const posts = await listPendingScheduledPosts(customerCode, year, month);
+async function getScheduledPostsSummary(customerCode, windowStart, windowEnd) {
+  const posts = await listPendingScheduledPosts(customerCode, windowStart, windowEnd);
   const counts = { x: 0, threads: 0, facebook: 0, instagram: 0, linkedin: 0 };
   let xUrlCount = 0;
 

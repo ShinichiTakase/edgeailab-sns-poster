@@ -5,10 +5,13 @@ const { getXSurcharge } = require("../lib/surchargeConfig");
 const { getStripe, ensureStripeCustomer } = require("../lib/stripeClient");
 const { planKey, pricesForPlan } = require("../lib/stripePricing");
 const { computeGraduatedAmount } = require("../lib/stripeTierPricing");
-const { getScheduledPostsSummary } = require("../lib/scheduledPostStore");
-const { listSchedulesForCustomer } = require("../lib/scheduleStore");
-const { listScheduleTexts } = require("../lib/scheduleTextStore");
-const { estimateScheduleFirings } = require("../lib/scheduleForecast");
+const {
+  getBillingCycleAnchor,
+  addStripeStyleMonths,
+  findCycleIndexForMonth,
+  findNextUnbilledCycleIndex,
+  getCombinedPostCounts,
+} = require("../lib/billingCycle");
 const { parseMonthParam, isPastMonth } = require("../lib/monthParam");
 const { resolvePriorities, findPrimary, findBackup } = require("../lib/paymentMethodPriority");
 const { BACKUP_CARD_CHARGED_EMAIL } = require("../lib/emailTemplates");
@@ -628,117 +631,37 @@ router.get("/api/billing/upcoming", requireAuth, async (req, res) => {
   }
 });
 
-// 「月」は歴月（カレンダー月）ではなく、実際のStripe請求サイクル（billing_cycle_anchor）基準。
-// 基本料金は先払い（決済日にその日から始まる次周期分を請求）・従量料金とXサーチャージは
-// 後払い（直前の決済日から今回の決済日までに発生した投稿分を、今回の決済日に請求）という
-// Stripe側の実際の請求方式（本ファイル冒頭のsubscription_data.trial_end設定コメント参照）を
-// そのまま予測ロジックにも反映する（2026-08-26改修）。
-//
-// アンカー（基準時刻）は、既にStripeサブスクリプションが存在する顧客はその
-// billing_cycle_anchor（実データ）を正とする。customer.trialEndsAtは決済登録後も
-// クリアされず残り続ける内部値のため、本稼働済みの顧客には使わない
-// （trialEndsAtとbilling_cycle_anchorが実際にズレていたケースを実機で確認済み）。
-// まだCheckout未完了（トライアル中）の顧客のみ、trialEndsAt+1日を将来のアンカー予測値として使う。
-async function getBillingCycleAnchor(stripe, customer) {
-  if (customer.stripeSubscriptionId) {
-    try {
-      const subscription = await stripe.subscriptions.retrieve(customer.stripeSubscriptionId);
-      return new Date(subscription.billing_cycle_anchor * 1000);
-    } catch (err) {
-      console.error(`[billing/upcoming] failed to retrieve subscription for anchor customerId=${customer.id}:`, err);
-      return null;
-    }
+// ダッシュボードの月選択プルダウン（ご請求予測・投稿予定）の開始年月を返す。
+// 既に決済済みの周期は選択肢に出す意味が無い（「次回いくら支払うか」を知るための機能のため）
+// ので、まだ決済されていない直近の周期を指す年月を返す（2026-08-26追加）。
+router.get("/api/billing/next-cycle", requireAuth, async (req, res) => {
+  const stripe = getStripe();
+  if (!stripe) {
+    return res.status(500).json({ error: "stripe_not_configured" });
   }
-  if (!customer.trialEndsAt) return null;
-  return new Date(new Date(customer.trialEndsAt).getTime() + 24 * 60 * 60 * 1000);
-}
-
-// アンカー日時からn周期後の決済日を求める。Stripeの実際の月次課金アンカーの挙動
-// （日単位・当月に該当日が無ければその月の最終日に丸める。例: 起点1/31なら2月は2/28）に
-// 合わせる（実機検証済みのStripe挙動。CLAUDE.md参照）。
-function addStripeStyleMonths(anchor, n) {
-  const day = anchor.getDate();
-  const base = new Date(
-    anchor.getFullYear(),
-    anchor.getMonth() + n,
-    1,
-    anchor.getHours(),
-    anchor.getMinutes(),
-    anchor.getSeconds(),
-    anchor.getMilliseconds()
-  );
-  const daysInTargetMonth = new Date(base.getFullYear(), base.getMonth() + 1, 0).getDate();
-  base.setDate(Math.min(day, daysInTargetMonth));
-  return base;
-}
-
-// 指定したカレンダー年月に決済日が属する周期番号nを求める（n=0が最初の決済＝本稼働開始日、
-// n未満は本稼働前で対象月なし）。月次サイクルのため該当月には必ずちょうど1つの決済日が
-// 存在する前提で、概算位置の前後1周期のみ確認すれば十分。
-function findCycleIndexForMonth(anchor, year, month) {
-  const approx = year * 12 + (month - 1) - (anchor.getFullYear() * 12 + anchor.getMonth());
-  for (const n of [approx - 1, approx, approx + 1]) {
-    const d = addStripeStyleMonths(anchor, n);
-    if (d.getFullYear() === year && d.getMonth() === month - 1) return n;
-  }
-  return null;
-}
-
-// 直近（今まさに進行中、またはStripeが次回請求として追跡している）の周期であれば、
-// Stripeのupcoming invoice previewには既に実際に報告済みのMeterイベント（＝実投稿）が
-// 段階制課金込みで反映されている（実機検証済み）ため、その実額をそのまま使う。
-// 対象外（2周期以上先で、Stripeがまだ追跡していない月）ならnullを返す。
-async function fetchRealCycleUsage(stripe, customer, prices, cycleEnd) {
-  if (!customer.stripeSubscriptionId) return null;
-
-  let preview;
   try {
-    preview = await stripe.invoices.createPreview({ customer: customer.stripeCustomerId });
+    const anchor = await getBillingCycleAnchor(stripe, req.customer);
+    if (!anchor) {
+      const now = new Date();
+      return res.json({ year: now.getFullYear(), month: now.getMonth() + 1 });
+    }
+    const n = findNextUnbilledCycleIndex(anchor, new Date());
+    const cycleDate = addStripeStyleMonths(anchor, n);
+    res.json({ year: cycleDate.getFullYear(), month: cycleDate.getMonth() + 1 });
   } catch (err) {
-    console.error(`[billing/upcoming] createPreview failed customerId=${customer.id}:`, err);
-    return null;
+    console.error(`[billing/next-cycle] failed customerId=${req.customer.id}:`, err);
+    res.status(500).json({ error: "internal_error" });
   }
-
-  // こちらの計算した決済日とStripe側のpreview.period_endが一致する場合のみ「実データ」として使う
-  // （数十秒程度のずれは許容。ずれていれば別周期なのでフォールバックに委ねる）。
-  const previewCycleEnd = new Date(preview.period_end * 1000);
-  if (Math.abs(previewCycleEnd.getTime() - cycleEnd.getTime()) >= 60 * 1000) return null;
-
-  let usageFee = 0;
-  let xSurcharge = 0;
-  for (const line of preview.lines.data) {
-    const priceId = line.price && line.price.id;
-    if (priceId === prices.metered) usageFee += line.amount;
-    else if (priceId === prices.meteredX) xSurcharge += line.amount;
-  }
-  return { usageFee, xSurcharge };
-}
-
-// 対象期間内で、この顧客の全スケジュール投稿（post_schedules）が生成するはずの投稿予定を
-// 合算する（1件ずつの単発予約=scheduled_postsとは別集計。estimateScheduleFirings参照）。
-async function getScheduleForecastForCustomer(customerId, windowStart, windowEnd) {
-  const schedules = await listSchedulesForCustomer(customerId);
-  let totalCount = 0;
-  let xUrlCount = 0;
-
-  await Promise.all(
-    schedules.map(async (schedule) => {
-      const texts = await listScheduleTexts(schedule.id);
-      const result = estimateScheduleFirings(schedule, texts, windowStart, windowEnd);
-      totalCount += result.totalCount;
-      xUrlCount += result.xUrlCount;
-    })
-  );
-
-  return { totalCount, xUrlCount };
-}
+});
 
 // 指定カレンダー月に決済日が来る請求を予測する。基本料金＝その決済日から始まる次周期分
 // （先払い）、従量料金・Xサーチャージ＝直前の決済日からこの決済日までの投稿分（後払い）。
 // 本稼働前（周期番号n<0）は請求ゼロ、最初の決済（n=0）は基本料金のみ（従量分の対象期間が
-// 存在しないため）。n>=1でStripeがまだ実績を追跡していない先の月は、scheduled_posts
-// （単発予約）＋スケジュール投稿の生成予定件数を、StripeのPrice tiers（単一の情報源）に
-// 当てはめて見積もる（単価・閾値はハードコードしない）。
+// 存在しないため）。n>=1は、その周期のうち今日までの実績（posting_logs）＋今日から
+// 決済日までの予測（scheduled_posts・post_schedulesのシミュレーション）を合算した件数に、
+// StripeのPrice tiers（単一の情報源）を当てはめて算出する（2026-08-26改修。「次回いくら
+// 支払うか」を知る機能のため、今日時点の実績と、現在のスケジュールを続けた場合の予測を
+// 合算して示す）。
 async function estimateBillingForecast(stripe, customer, prices, year, month) {
   const anchor = await getBillingCycleAnchor(stripe, customer);
   if (!anchor) return { basicFee: 0, usageFee: 0, xSurcharge: 0, total: 0 };
@@ -754,25 +677,14 @@ async function estimateBillingForecast(stripe, customer, prices, year, month) {
   const cycleStart = addStripeStyleMonths(anchor, n - 1);
   const cycleEnd = addStripeStyleMonths(anchor, n);
 
-  const real = await fetchRealCycleUsage(stripe, customer, prices, cycleEnd);
-  if (real) {
-    return { basicFee, usageFee: real.usageFee, xSurcharge: real.xSurcharge, total: basicFee + real.usageFee + real.xSurcharge };
-  }
-
-  // Stripe側にまだ実績データが無い（2周期以上先の）月は、予定投稿数から見積もる。
-  // 単発予約（scheduled_posts）の集計は暦月単位のため、周期開始日が属する暦月で近似する
-  // （数ヶ月先の見積もりのため、この程度の近似で許容する）。
-  const [meteredPrice, meteredXPrice, summary, scheduleForecast] = await Promise.all([
+  const [meteredPrice, meteredXPrice, combined] = await Promise.all([
     stripe.prices.retrieve(prices.metered, { expand: ["tiers"] }),
     stripe.prices.retrieve(prices.meteredX, { expand: ["tiers"] }),
-    getScheduledPostsSummary(customer.id, cycleStart.getFullYear(), cycleStart.getMonth() + 1),
-    getScheduleForecastForCustomer(customer.id, cycleStart, cycleEnd),
+    getCombinedPostCounts(customer, cycleStart, cycleEnd),
   ]);
 
-  const totalCount = summary.totalCount + scheduleForecast.totalCount;
-  const xUrlCount = summary.xUrlCount + scheduleForecast.xUrlCount;
-  const usageFee = computeGraduatedAmount(meteredPrice.tiers, totalCount);
-  const xSurcharge = computeGraduatedAmount(meteredXPrice.tiers, xUrlCount);
+  const usageFee = computeGraduatedAmount(meteredPrice.tiers, combined.totalCount);
+  const xSurcharge = computeGraduatedAmount(meteredXPrice.tiers, combined.xUrlCount);
   return { basicFee, usageFee, xSurcharge, total: basicFee + usageFee + xSurcharge };
 }
 

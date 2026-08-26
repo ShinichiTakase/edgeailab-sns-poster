@@ -21,12 +21,16 @@ const PLATFORM_TEXT_KEY = { x: "x_text", threads: "threads_text", facebook: "fac
  * @param {Date} windowStart
  * @param {Date} windowEnd
  */
+function emptyPlatformCounts() {
+  return { x: 0, threads: 0, facebook: 0, instagram: 0, linkedin: 0 };
+}
+
 function estimateScheduleFirings(schedule, texts, windowStart, windowEnd) {
   if (schedule.is_paused || schedule.auto_paused) {
-    return { totalCount: 0, xUrlCount: 0 };
+    return { totalCount: 0, xUrlCount: 0, counts: emptyPlatformCounts() };
   }
   if (!Array.isArray(texts) || texts.length === 0) {
-    return { totalCount: 0, xUrlCount: 0 };
+    return { totalCount: 0, xUrlCount: 0, counts: emptyPlatformCounts() };
   }
 
   const materializedThrough = schedule.last_materialized_dt
@@ -43,6 +47,7 @@ function estimateScheduleFirings(schedule, texts, windowStart, windowEnd) {
   let roundRobinIndex = Number(schedule.round_robin_index) || 0;
   let totalCount = 0;
   let xUrlCount = 0;
+  const counts = emptyPlatformCounts();
 
   // 無限ループ防止の安全弁（1年分=366日で十分。end_date未設定の請求予測は最大1ヶ月幅想定）。
   for (let i = 0; i < 366 && cursorDate.getTime() < end.getTime(); i++, cursorDate = new Date(cursorDate.getTime() + 24 * 60 * 60 * 1000)) {
@@ -65,12 +70,13 @@ function estimateScheduleFirings(schedule, texts, windowStart, windowEnd) {
         const content = text[PLATFORM_TEXT_KEY[platform]] || "";
         if (!content.trim()) continue;
         totalCount += 1;
+        counts[platform] = (counts[platform] || 0) + 1;
         if (platform === "x" && containsUrl(content)) xUrlCount += 1;
       }
     }
   }
 
-  return { totalCount, xUrlCount };
+  return { totalCount, xUrlCount, counts };
 }
 
 module.exports = { estimateScheduleFirings };
