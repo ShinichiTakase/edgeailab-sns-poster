@@ -63,14 +63,6 @@ router.post("/api/team/invite", requireAuth, requireVerified, express.json(), as
   if (!VALID_ROLES.includes(role)) {
     return res.status(400).json({ error: "invalid_role" });
   }
-  // メインユーザー（アカウント契約者本人。customer.email＝users[0].email）を
-  // メンバーとして招待できてしまうと、既存のusers[0]要素（＝本人の実ログイン
-  // 資格情報）がreissueInvitation/acceptInvitationで上書きされ、role破壊や
-  // userId/passwordHash差し替えによる本人アカウント乗っ取りにつながるため、
-  // 常にusers[]内の重複チェックより先に拒否する。
-  if (email.trim().toLowerCase() === (req.customer.email || "").trim().toLowerCase()) {
-    return res.status(409).json({ error: "cannot_invite_main_user" });
-  }
   let normalizedApproverIds = [];
   if (role === "編集者") {
     if (!Array.isArray(approverIds) || approverIds.length === 0) {
@@ -85,6 +77,21 @@ router.post("/api/team/invite", requireAuth, requireVerified, express.json(), as
 
   try {
     const target = email.trim().toLowerCase();
+
+    // メインユーザー（いずれかのcustomerレコードの契約者本人＝customer.email）を
+    // メンバーとして招待できてしまう問題への対処。自アカウント宛て（req.customer.email
+    // と一致）だけでなく、他の顧客アカウントの契約者本人のメールも対象。自アカウント
+    // 宛ての場合は既存のusers[0]要素（＝本人の実ログイン資格情報）がreissueInvitation/
+    // acceptInvitationで上書きされ、role破壊やuserId/passwordHash差し替えによる本人
+    // アカウント乗っ取りにつながる。他アカウント宛ての場合も、契約者本人を別契約の
+    // 一メンバーとして扱えてしまうこと自体が意図しない状態のため、全顧客レコードを
+    // 対象に判定する（getCustomerByEmailはcustomer.email＝契約者本人のメールのみを
+    // 見るため、単なる招待メンバーのメールとは衝突しない）。
+    const mainUserCustomer = await customerStore.getCustomerByEmail(target);
+    if (mainUserCustomer) {
+      return res.status(409).json({ error: "cannot_invite_main_user" });
+    }
+
     const existing = (req.customer.users || []).find((u) => (u.email || "").toLowerCase() === target);
     if (existing && invitationStatusOf(existing) === "承諾済み") {
       return res.status(409).json({ error: "already_member" });
