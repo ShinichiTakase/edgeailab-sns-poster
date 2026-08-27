@@ -29,6 +29,7 @@ const {
   roleOf,
 } = require("../lib/customerStore");
 const { sendTrialPostLimitWarningIfNeeded } = require("../lib/trialPostLimitWarningMailer");
+const { sendOneShotPostResultEmail } = require("../lib/oneShotPostResultMailer");
 const { activateAfterTrialLimitIfNeeded, sendTrialPostLimitReachedEmailIfNeeded } = require("../lib/trialLimitAutoActivation");
 const { containsUrl, extractFirstUrl } = require("../lib/urlDetection");
 const xPoster = require("../lib/xPoster");
@@ -234,6 +235,21 @@ router.post(
         });
       } catch (err) {
         console.error(`[posts] posting log write failed customerId=${customerId} platform=${platform}:`, err);
+      }
+
+      // 即時投稿の完了通知メール（scheduledPostExecutor.jsが担う予約実行分と対になる、
+      // ワンショット投稿の完了メール）。失敗はログのみで投稿自体の成否には影響させない。
+      try {
+        await sendOneShotPostResultEmail({
+          customer: req.customer,
+          recipientUserId: req.user.userId,
+          content: text,
+          platform,
+          success: true,
+          logger: { logError: (...args) => console.error(...args) },
+        });
+      } catch (err) {
+        console.error(`[posts] one-shot result email failed customerId=${customerId} platform=${platform}:`, err);
       }
 
       successCount += 1;

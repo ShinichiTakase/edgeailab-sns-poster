@@ -166,6 +166,25 @@ const SCHEDULED_POST_RESULT_EMAIL = {
     ].join("\n"),
 };
 
+// ワンショット投稿（即時投稿・予約投稿の一括登録、編集者の承認経由分を含む）専用の
+// 完了通知。SCHEDULED_POST_RESULT_EMAILはスケジュール名（post_schedules.name）を
+// 前提とした文面のため、スケジュールに紐付かないワンショット投稿には流用できず
+// 別テンプレートとして新設した。
+const ONE_SHOT_POST_RESULT_EMAIL = {
+  subject: (success) => `【EdgeAI Lab】ワンショット投稿が${success ? "完了しました" : "失敗しました"}`,
+  body: (platformLabel, content, success) =>
+    [
+      `ワンショット投稿が${success ? "正常に完了しました" : "失敗しました"}。`,
+      "",
+      `投稿先: ${platformLabel}`,
+      "投稿内容:",
+      content || "(内容なし)",
+      ...(success
+        ? []
+        : ["", "自動で再試行を行いましたが、投稿できませんでした。内容をご確認のうえ、再度投稿をお試しください。"]),
+    ].join("\n"),
+};
+
 const PASSWORD_RESET_EMAIL = {
   subject: "【EdgeAI Lab】パスワード再設定のご案内",
   body: (resetUrl) =>
@@ -190,6 +209,7 @@ module.exports = {
   APPROVAL_REQUEST_EMAIL,
   APPROVAL_DECIDED_EMAIL,
   SCHEDULED_POST_RESULT_EMAIL,
+  ONE_SHOT_POST_RESULT_EMAIL,
   PASSWORD_RESET_EMAIL,
   planLabel,
 };

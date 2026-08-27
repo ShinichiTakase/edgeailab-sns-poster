@@ -19,6 +19,7 @@ const { reportMeterEvent } = require("./meterEvents");
 const { containsUrl, extractFirstUrl } = require("./urlDetection");
 const scheduleStore = require("./scheduleStore");
 const { sendScheduleResultEmail } = require("./scheduleResultMailer");
+const { sendOneShotPostResultEmail } = require("./oneShotPostResultMailer");
 const { sendTrialPostLimitWarningIfNeeded } = require("./trialPostLimitWarningMailer");
 const { activateAfterTrialLimitIfNeeded, sendTrialPostLimitReachedEmailIfNeeded } = require("./trialLimitAutoActivation");
 const xPoster = require("./xPoster");
@@ -113,8 +114,9 @@ async function attemptScheduledPost(post, customerCache, logger) {
 
   await markScheduledPostStatus(post.id, "done");
 
-  // スケジュール投稿（post_schedules）由来の予約のみ対象。ワンショット投稿ウィザードからの
-  // 直接予約はsource_schedule_idが空のため対象外（notify_emailはpost_schedules側の設定のため）。
+  // トライアル投稿数カウントの追加加算は、スケジュール投稿（post_schedules）由来の予約のみ
+  // 対象（ワンショット投稿ウィザードからの直接予約はsource_schedule_idが空。posts.jsが
+  // 作成時点で既にbumpTrialPostCount済みのため、ここで数えると二重加算になる）。
   if (post.source_schedule_id) {
     // トライアル投稿数のカウント（2026-08-25追加）。ワンショット投稿（posts.js）は
     // POST /api/posts/schedule の作成時点で既にbumpTrialPostCount済みのため、ここで
@@ -158,6 +160,21 @@ async function attemptScheduledPost(post, customerCache, logger) {
       await sendScheduleResultEmail({ schedule, customer, post, platform, success: true, logger });
     } catch (mailErr) {
       logger.logError(`[scheduledPostExecutor] result email failed id=${post.id}:`, mailErr);
+    }
+  } else {
+    // ワンショット投稿（予約投稿の一括登録・編集者の承認経由分を含む）の完了通知。
+    // post_schedulesが無いためnotify_emailのようなオプトイン設定は無く、常に送信する。
+    try {
+      await sendOneShotPostResultEmail({
+        customer,
+        recipientUserId: post.created_by,
+        content: post.content,
+        platform,
+        success: true,
+        logger,
+      });
+    } catch (mailErr) {
+      logger.logError(`[scheduledPostExecutor] one-shot result email failed id=${post.id}:`, mailErr);
     }
   }
 
