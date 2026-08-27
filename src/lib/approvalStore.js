@@ -83,6 +83,16 @@ async function getBatch(collection, batchId) {
   if (records.length === 0) return null;
   const approvals = JSON.parse(records[0].approvals_json || "[]");
   return {
+    // groupByBatchId()が返すオブジェクトと形を揃える（batchId/createdByが無いと、
+    // findBatchByToken経由のGET /api/approvals/by-token（トークン付きURLからの
+    // アクセス）がbatch.batchId=undefinedのまま返してしまい、続くPOST
+    // /api/approvals/decideがbatchId無しのリクエストになって404 not_foundで
+    // 失敗する。同様にPOST /api/approvals/decide内の却下通知・
+    // approvalExpiryCheck.jsの失効通知もbatch.createdByがundefinedのまま
+    // requesterUserIdに渡り、該当ユーザーが見つからず通知メールが無言で
+    // 送られない不具合があった。2026-08-27修正）。
+    batchId,
+    createdBy: records[0].created_by,
     records,
     approvals,
     status: approvalStatusOf(records[0]),
