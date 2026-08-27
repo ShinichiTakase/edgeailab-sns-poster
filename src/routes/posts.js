@@ -462,15 +462,19 @@ router.get("/api/posts/list", requireAuth, blockEditorRole, async (req, res) => 
       // status=doneのものは、実行時に作られたposting_logs側（上のループ）に既に同じ投稿が
       // 記録されているため、ここで重複して行を作らない（重複表示防止）。
       if (status === "done") continue;
-      // 承認者に却下された投稿はstatusがpendingのまま変化しない（approvalStore.js
-      // decideApprovalはapproval_statusのみ更新し、statusは実行エンジン
+      // 承認者に却下された投稿・承認依頼から72時間承認/却下されず失効した投稿は、
+      // statusがpendingのまま変化しない（approvalStore.js decideApproval/
+      // checkExpiredApprovalsはapproval_statusのみ更新し、statusは実行エンジン
       // 〔scheduledPostExecutor.js〕が投稿を試みて初めて変わる設計のため）。approval_status
-      // を見ずにstatusだけで判定すると、却下済みでも一覧上は「予約中」のまま実際には
-      // 二度と実行されない投稿になってしまう（2026-08-27修正）。failedは再試行の余地
-      // （scheduledPostRetryStore.js）が残っているかどうかで「再試行」/「失敗」を出し分ける。
+      // を見ずにstatusだけで判定すると、却下・失効済みでも一覧上は「予約中」のまま実際には
+      // 二度と実行されない投稿になってしまう（却下: 2026-08-27修正、失効: 同日追加）。
+      // failedは再試行の余地（scheduledPostRetryStore.js）が残っているかどうかで
+      // 「再試行」/「失敗」を出し分ける。
       let result;
       if (approvalStatus === "rejected") {
         result = "rejected";
+      } else if (approvalStatus === "expired") {
+        result = "expired";
       } else if (status === "failed") {
         result = retryStore.getDisplayState(post.id);
       } else {
