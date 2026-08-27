@@ -451,12 +451,24 @@ router.get("/api/posts/list", requireAuth, blockEditorRole, async (req, res) => 
 
     for (const post of scheduledPosts) {
       const status = Array.isArray(post.status) ? post.status[0] : post.status;
+      const approvalStatus = Array.isArray(post.approval_status) ? post.approval_status[0] : post.approval_status;
       // status=doneのものは、実行時に作られたposting_logs側（上のループ）に既に同じ投稿が
       // 記録されているため、ここで重複して行を作らない（重複表示防止）。
       if (status === "done") continue;
-      // failedは再試行の余地（scheduledPostRetryStore.js）が残っているかどうかで
-      // 「再試行」/「失敗」を出し分ける。
-      const result = status === "failed" ? retryStore.getDisplayState(post.id) : "pending";
+      // 承認者に却下された投稿はstatusがpendingのまま変化しない（approvalStore.js
+      // decideApprovalはapproval_statusのみ更新し、statusは実行エンジン
+      // 〔scheduledPostExecutor.js〕が投稿を試みて初めて変わる設計のため）。approval_status
+      // を見ずにstatusだけで判定すると、却下済みでも一覧上は「予約中」のまま実際には
+      // 二度と実行されない投稿になってしまう（2026-08-27修正）。failedは再試行の余地
+      // （scheduledPostRetryStore.js）が残っているかどうかで「再試行」/「失敗」を出し分ける。
+      let result;
+      if (approvalStatus === "rejected") {
+        result = "rejected";
+      } else if (status === "failed") {
+        result = retryStore.getDisplayState(post.id);
+      } else {
+        result = "pending";
+      }
       rows.push({
         // 投稿日時＝この予約（一括生成分含む）が作成された日時。実際に投稿された日時は
         // 投稿完了時間（completedAt）が担う。2列を混同しないよう役割を分離している。
@@ -467,10 +479,13 @@ router.get("/api/posts/list", requireAuth, blockEditorRole, async (req, res) => 
         // （posting_logs側の行のみaccountNameを持つ）。
         accountName: null,
         content: post.content || "",
-        // 予約日時は実行前の目安表示のためのもの。投稿完了後は役目を終えるためブランクにする。
-        scheduledAt: status === "pending" ? post.scheduled_at : null,
+        // 予約日時は実行前の目安表示のためのもの。投稿完了後・却下後は役目を終えるため
+        // ブランクにする（却下時のcompletedAtは正確な却下時刻ではなくレコードの
+        // updatedAtで代用。承認バッチはapprovals_json内に個別のrespondedAtを持つが、
+        // ここでは簡便のためレコード全体のupdatedAtを使う）。
+        scheduledAt: result === "pending" ? post.scheduled_at : null,
         isImmediate: false,
-        completedAt: status === "pending" ? null : post.updatedAt,
+        completedAt: result === "pending" ? null : post.updatedAt,
         result,
       });
     }
