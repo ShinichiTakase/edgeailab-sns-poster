@@ -119,8 +119,12 @@ async function findBatchByToken(collection, token) {
 }
 
 /**
- * 承認/却下を1件反映する。approverIdまたはtokenのどちらかで承認者を特定する
- * （ログイン画面からのアクセス＝approverId、メールリンク＝token）。
+ * 承認/却下を1件反映する。approverId・tokenの両方が渡されうる（ログイン中に
+ * メールリンクを開いた場合等）。まずapproverIdでの一致を試み、一致しなければ
+ * tokenでの一致にフォールバックする（2026-08-27修正: 以前はapproverIdが
+ * 渡された時点でtokenを一切見なかったため、承認リンクを開いたブラウザに
+ * このバッチの承認者ではない別アカウントの既存セッションが残っているだけで、
+ * 正しいトークンを持っていてもnot_approverになってしまっていた）。
  * @returns {{ ok:true, finalStatus }} または {{ error: string }}
  */
 async function decideApproval(collection, batchId, { approverId, token, decision, comment }) {
@@ -129,9 +133,9 @@ async function decideApproval(collection, batchId, { approverId, token, decision
   if (batch.status !== "pending") return { error: "already_decided" };
   if (batch.expiresAt && new Date(batch.expiresAt).getTime() < Date.now()) return { error: "expired" };
 
-  const entry = approverId
-    ? batch.approvals.find((a) => a.approverId === approverId)
-    : batch.approvals.find((a) => a.token === token);
+  const entry =
+    (approverId && batch.approvals.find((a) => a.approverId === approverId)) ||
+    (token && batch.approvals.find((a) => a.token === token));
   if (!entry) return { error: "not_approver" };
   if (entry.status !== "pending") return { error: "already_responded" };
 

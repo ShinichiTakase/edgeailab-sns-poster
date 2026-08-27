@@ -131,10 +131,15 @@ router.post("/api/approvals/decide", express.json(), async (req, res) => {
 
   try {
     const session = await resolveOptionalSession(req);
-    const decideArgs = session ? { approverId: session.user.userId, decision, comment } : { token, decision, comment };
     if (!session && !token) {
       return res.status(401).json({ error: "unauthenticated" });
     }
+    // セッションが存在してもトークンが指定されていれば両方decideApprovalへ渡す
+    // （セッションの持ち主がこのバッチの承認者と一致しない場合、トークンでの解決に
+    // フォールバックする。以前はセッションがあれば無条件にトークンを無視していたため、
+    // 承認リンクを開いたブラウザに別アカウントの既存セッションが残っているだけで
+    // 正しいトークンを持っていても404 not_approverになる不具合があった）。
+    const decideArgs = { approverId: session ? session.user.userId : undefined, token, decision, comment };
 
     const result = await approvalStore.decideApproval(collection, batchId, decideArgs);
     if (result.error) {
