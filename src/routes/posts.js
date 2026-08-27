@@ -88,7 +88,7 @@ function validatePlatformsAndTexts(platforms, texts) {
 // 編集者の即時投稿・予約投稿を、実投稿の代わりにscheduled_postsへ承認待ちで作成する
 // （即時投稿・予約投稿の両ルートから共有。プラットフォームごとに1レコード、
 // 同一batch_idでひとつの承認対象単位とする。approvalStore.js参照）。
-async function requestApprovalForOneShot(req, res, { platforms, texts, imageUrl, facebookPageId, store, scheduledAt }) {
+async function requestApprovalForOneShot(req, res, { platforms, texts, imageUrl, facebookPageId, store, scheduledAt, notifyEmail }) {
   const approverIds = JSON.parse(req.user.approverIds || "[]");
   if (approverIds.length === 0) {
     return res.status(400).json({ error: "no_approver_configured" });
@@ -129,6 +129,7 @@ async function requestApprovalForOneShot(req, res, { platforms, texts, imageUrl,
         containsUrl: containsUrl(text),
         imageUrl: platform === "instagram" ? imageUrl : undefined,
         facebookPageId: platform === "facebook" ? facebookPageId : undefined,
+        notifyEmail,
         approvalFields,
       });
       results[platform] = { ok: true, scheduledPostId: created.id, pendingApproval: true };
@@ -161,7 +162,7 @@ router.post(
   blockViewerRole, blockApproverRole,
   express.json(),
   async (req, res) => {
-    const { platforms, texts, imageUrl, facebookPageId } = req.body || {};
+    const { platforms, texts, imageUrl, facebookPageId, notifyEmail } = req.body || {};
 
     const validationError = validatePlatformsAndTexts(platforms, texts);
     if (validationError) {
@@ -179,7 +180,7 @@ router.post(
     // schedule-detail.jsの投稿文章バッチと同じ仕組み。承認完了後はscheduled_atが既に
     // 過去のためscheduledPostRunner.jsの次回tickで即実行される）。
     if (roleOf(req.user) === "編集者") {
-      return requestApprovalForOneShot(req, res, { platforms, texts, imageUrl, facebookPageId, store, scheduledAt: new Date().toISOString() });
+      return requestApprovalForOneShot(req, res, { platforms, texts, imageUrl, facebookPageId, store, scheduledAt: new Date().toISOString(), notifyEmail });
     }
 
     const results = {};
@@ -238,18 +239,22 @@ router.post(
       }
 
       // 即時投稿の完了通知メール（scheduledPostExecutor.jsが担う予約実行分と対になる、
-      // ワンショット投稿の完了メール）。失敗はログのみで投稿自体の成否には影響させない。
-      try {
-        await sendOneShotPostResultEmail({
-          customer: req.customer,
-          recipientUserId: req.user.userId,
-          content: text,
-          platform,
-          success: true,
-          logger: { logError: (...args) => console.error(...args) },
-        });
-      } catch (err) {
-        console.error(`[posts] one-shot result email failed customerId=${customerId} platform=${platform}:`, err);
+      // ワンショット投稿の完了メール）。notifyEmail===falseの場合のみ送信しない
+      // （未指定時はデフォルトで送信＝従来どおりの挙動を維持）。失敗はログのみで
+      // 投稿自体の成否には影響させない。
+      if (notifyEmail !== false) {
+        try {
+          await sendOneShotPostResultEmail({
+            customer: req.customer,
+            recipientUserId: req.user.userId,
+            content: text,
+            platform,
+            success: true,
+            logger: { logError: (...args) => console.error(...args) },
+          });
+        } catch (err) {
+          console.error(`[posts] one-shot result email failed customerId=${customerId} platform=${platform}:`, err);
+        }
       }
 
       successCount += 1;
@@ -307,7 +312,7 @@ router.post(
   blockViewerRole, blockApproverRole,
   express.json(),
   async (req, res) => {
-    const { platforms, texts, imageUrl, facebookPageId, scheduledAt } = req.body || {};
+    const { platforms, texts, imageUrl, facebookPageId, scheduledAt, notifyEmail } = req.body || {};
 
     const validationError = validatePlatformsAndTexts(platforms, texts);
     if (validationError) {
@@ -334,6 +339,7 @@ router.post(
         facebookPageId,
         store,
         scheduledAt: scheduledDate.toISOString(),
+        notifyEmail,
       });
     }
 
@@ -368,6 +374,7 @@ router.post(
           containsUrl: textContainsUrl,
           imageUrl: platform === "instagram" ? imageUrl : undefined,
           facebookPageId: platform === "facebook" ? facebookPageId : undefined,
+          notifyEmail,
         });
         successCount += 1;
         results[platform] = { ok: true, scheduledPostId: created.id };

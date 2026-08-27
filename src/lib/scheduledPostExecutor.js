@@ -161,9 +161,10 @@ async function attemptScheduledPost(post, customerCache, logger) {
     } catch (mailErr) {
       logger.logError(`[scheduledPostExecutor] result email failed id=${post.id}:`, mailErr);
     }
-  } else {
+  } else if (post.notify_email !== false) {
     // ワンショット投稿（予約投稿の一括登録・編集者の承認経由分を含む）の完了通知。
-    // post_schedulesが無いためnotify_emailのようなオプトイン設定は無く、常に送信する。
+    // scheduled_posts.notify_emailは投稿時のチェックボックス（one-shot-post.html）由来。
+    // 未設定（機能追加前に作成されたレコード）はtrue扱い＝従来どおり送信する。
     try {
       await sendOneShotPostResultEmail({
         customer,

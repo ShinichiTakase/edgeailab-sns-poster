@@ -95,6 +95,10 @@ async function getScheduledPostsSummary(customerCode, windowStart, windowEnd) {
  * @param {string} [videoUrl] Instagramリール投稿に必須の動画URL（imageUrlと排他。他プラットフォームでは未使用）
  * @param {string} [sourceScheduleId] スケジュール投稿（post_schedules）から生成された場合のみ設定
  * @param {string} [facebookPageId] Facebook投稿先ページ（複数ページ連携時のみ。未指定なら実行時に先頭ページへフォールバック）
+ * @param {boolean} [notifyEmail] 投稿後結果をメールで知らせるか（未指定はtrue扱い）。
+ *   2026-08-27現在、scheduled_postsスキーマにnotify_emailフィールドが未作成のため未使用
+ *   （書き込むと microCMS が400 "unexpected key" を返し予約作成自体が失敗する。実機で確認済み）。
+ *   フィールド追加後、本文のnotify_email行を復元すること。
  */
 async function createScheduledPost({
   customerCode,
@@ -107,6 +111,8 @@ async function createScheduledPost({
   videoUrl,
   sourceScheduleId,
   facebookPageId,
+  // eslint-disable-next-line no-unused-vars
+  notifyEmail,
   approvalFields,
 }) {
   const res = await microcmsFetch(`/scheduled_posts`, {

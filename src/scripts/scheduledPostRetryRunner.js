@@ -59,7 +59,7 @@ async function main() {
           if (customer && post.source_schedule_id) {
             const schedule = await scheduleStore.getScheduleById(post.source_schedule_id);
             await sendScheduleResultEmail({ schedule, customer, post, platform, success: false, logger: { logError } });
-          } else if (customer) {
+          } else if (customer && post.notify_email !== false) {
             await sendOneShotPostResultEmail({
               customer,
               recipientUserId: post.created_by,

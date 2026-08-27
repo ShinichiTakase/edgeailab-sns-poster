@@ -1,8 +1,8 @@
 // ワンショット投稿（即時投稿・予約投稿の一括登録、編集者の承認経由分を含む）の投稿結果を
 // 投稿者へメール通知する。scheduleResultMailer.js（post_schedules経由のスケジュール投稿専用）
-// の姉妹モジュール。scheduled_posts.source_schedule_idが空＝スケジュールに紐付かない
-// ワンショット投稿であるため、post_schedules.notify_emailのようなオプトイン設定は存在せず、
-// 常に送信する。
+// の姉妹モジュール。オプトインは呼び出し元が判定する（即時投稿はreq.body.notifyEmail、
+// 予約・承認経由分はscheduled_posts.notify_email、2026-08-27追加）。このモジュール自体は
+// 送信要否を判定せず、呼ばれたら送るだけ。
 // 呼び出し元: posts.js（即時投稿の同期実行分）・scheduledPostExecutor.js（予約実行・承認後の
 // 実行分の成功時）・scheduledPostRetryRunner.js（再試行を打ち止めた最終失敗時）。
 // 送信失敗は呼び出し元でログのみに留め、投稿処理自体の成否には影響させない方針のため、
