@@ -470,6 +470,26 @@ router.get("/api/auth/me", requireAuth, async (req, res) => {
   const store = loadStore();
   const connected = Object.keys(store[req.customer.id] || {});
   const nextBillingDate = await getNextBillingDate(req.customer);
+  const role = Array.isArray(req.user.role) ? req.user.role[0] || null : req.user.role || null;
+
+  // 編集者のプロフィールメニューに「承認者：氏名・メールアドレス」を表示するため、
+  // 自分のapproverIds（招待時に指定された承認者のuserId配列、JSON文字列）を
+  // customer.usersから名前・メールへ解決する。approvalStore.jsの
+  // sendApprovalRequestEmailsと同じ解決パターン。編集者以外では常に空配列。
+  let approvers = [];
+  if (role === "編集者") {
+    let approverIds = [];
+    try {
+      approverIds = JSON.parse(req.user.approverIds || "[]");
+    } catch (e) {
+      approverIds = [];
+    }
+    approvers = approverIds
+      .map((id) => (req.customer.users || []).find((u) => u.userId === id))
+      .filter(Boolean)
+      .map((u) => ({ name: u.name || null, email: u.email }));
+  }
+
   res.json({
     ...safeCustomer(req.customer),
     nextBillingDate,
@@ -480,7 +500,8 @@ router.get("/api/auth/me", requireAuth, async (req, res) => {
       // サインアップ本人のusers[0]要素にはnameが無くcontactNameのみが氏名
       // （フロント側でcontactNameへフォールバックする）。
       name: req.user.name || null,
-      role: Array.isArray(req.user.role) ? req.user.role[0] || null : req.user.role || null,
+      role,
+      approvers,
     },
   });
 });
