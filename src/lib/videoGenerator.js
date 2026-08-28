@@ -6,7 +6,7 @@ const fs = require("fs");
 const path = require("path");
 const crypto = require("crypto");
 const { PassThrough } = require("stream");
-const { createCanvas, GlobalFonts } = require("@napi-rs/canvas");
+const { createCanvas, GlobalFonts, loadImage } = require("@napi-rs/canvas");
 const ffmpeg = require("fluent-ffmpeg");
 const { getAnthropic } = require("./anthropicClient");
 
@@ -21,8 +21,9 @@ const FPS = 30;
 const DURATION_SEC = 16;
 const TOTAL_FRAMES = FPS * DURATION_SEC;
 // ループ再生時に不自然な切り替わりが目立たないよう、開始・終了付近はテキストなしの
-// 背景のみにする（フッターは常時表示のまま）。
-const HOLD_SEC = 0.5;
+// 背景のみにする（フッターは常時表示のまま）。タイトル表示は0.5秒では短すぎるという
+// 指摘のため1.5秒に延長した（2026-08-28）。
+const HOLD_SEC = 1.5;
 const HOLD_FRAMES = Math.round(HOLD_SEC * FPS);
 const ACTIVE_FRAMES = TOTAL_FRAMES - HOLD_FRAMES * 2;
 
@@ -198,7 +199,7 @@ function easeOutCubic(t) {
   return 1 - Math.pow(1 - t, 3);
 }
 
-// ---------- タイトル（開始直後0.5秒間、プロフィールグリッドのサムネイルに表示される
+// ---------- タイトル（開始直後HOLD_SEC秒間、プロフィールグリッドのサムネイルに表示される
 // 0フレーム目を含む区間）----------
 // キャプション本文とは別のタイトルフィールドはデータモデルに存在しないため、本文の
 // 先頭段落（改行区切りの最初のまとまり）を抜き出してタイトルとして使う。
@@ -231,8 +232,7 @@ function fitTitle(ctx, text, maxWidth) {
 }
 
 // holdT: 0（開始）→1（ホールド区間の終端＝本文アニメーション開始点）。終盤30%
-// （0.5秒中の約0.15秒）でフェードアウトし、本文アニメーションが始まる時点では
-// 完全に透明になっているようにする。
+// でフェードアウトし、本文アニメーションが始まる時点では完全に透明になっているようにする。
 function drawTitle(ctx, { lines, fontSize, lineHeight, textColor, holdT }) {
   const fadeStart = 0.7;
   const opacity = holdT < fadeStart ? 1 : Math.max(0, 1 - (holdT - fadeStart) / (1 - fadeStart));
@@ -260,6 +260,24 @@ function drawTitle(ctx, { lines, fontSize, lineHeight, textColor, holdT }) {
 // との間隔は十分確保できている）。
 const CAPTION_AREA = { top: 320, bottom: HEIGHT - 360, left: 90, right: WIDTH - 90 };
 const FOOTER_Y = HEIGHT - 130;
+
+// CSSのbackground-size: coverと同じ考え方で、フレーム全体を隙間なく覆うよう画像を
+// 拡大・中央クロップする描画パラメータを1回だけ計算する（毎フレーム同じ静止画のため）。
+function computeCoverDraw(img, targetWidth, targetHeight) {
+  const scale = Math.max(targetWidth / img.width, targetHeight / img.height);
+  const drawWidth = img.width * scale;
+  const drawHeight = img.height * scale;
+  return { dx: (targetWidth - drawWidth) / 2, dy: (targetHeight - drawHeight) / 2, drawWidth, drawHeight };
+}
+
+// ユーザー指定の背景画像は任意の写真のため、AI生成の単色背景と違いWCAGコントラスト計算が
+// できない。そのため常に白文字＋半透明の黒スクリムを重ねる方式にして、どんな画像でも
+// テキストが読める状態を保証する（テキスト色自体はrenderVideo側で固定する）。
+function drawBackgroundImage(ctx, image, draw) {
+  ctx.drawImage(image, draw.dx, draw.dy, draw.drawWidth, draw.drawHeight);
+  ctx.fillStyle = "rgba(0, 0, 0, 0.45)";
+  ctx.fillRect(0, 0, WIDTH, HEIGHT);
+}
 
 function drawFooter(ctx, textColor) {
   ctx.save();
@@ -360,9 +378,11 @@ const DRAWERS = { typewriter: drawTypewriter, endroll: drawEndroll, slidein: dra
  * @param {string} params.captionText 動画に表示するキャプション文
  * @param {string} params.outPath 出力先mp4パス（絶対パス）
  * @param {AbortSignal} [params.signal] キャンセル用
- * @returns {Promise<{accentColorHex: string, textColor: string, contrastRatio: number, animation: string, bgmFolder: string, bgmFile: string}>}
+ * @param {string} [params.backgroundImagePath] ユーザー指定の背景画像（絶対パス）。
+ *   未指定の場合は従来通りAIが選んだアクセントカラーの単色背景になる。
+ * @returns {Promise<{accentColorHex: string, textColor: string, contrastRatio: number|null, animation: string, bgmFolder: string, bgmFile: string}>}
  */
-async function renderVideo({ captionText, outPath, signal }) {
+async function renderVideo({ captionText, outPath, signal, backgroundImagePath }) {
   ensureFontRegistered();
 
   // 体感速度の遅さの原因切り分け調査用（2026-08-20）。Claude API呼び出し（配色・BGM判定）と
@@ -378,9 +398,17 @@ async function renderVideo({ captionText, outPath, signal }) {
   const __styleMs = Date.now() - __styleT0;
   if (signal?.aborted) throw new DOMExceptionLike("canceled");
 
-  const { textColor, contrastRatio: ratio } = pickTextColor(style.accentColorHex);
+  // 背景画像が指定された場合、アクセントカラーは単色背景の代わりには使わない（BGM選定は
+  // 引き続きAI判定のstyle.bgmFolderを使う）。任意の写真に対するWCAGコントラスト計算は
+  // できないため、白文字＋drawBackgroundImageの黒スクリムで可読性を保証する。
+  const { textColor, contrastRatio: ratio } = backgroundImagePath
+    ? { textColor: "#ffffff", contrastRatio: null }
+    : pickTextColor(style.accentColorHex);
   const animation = ANIMATIONS[Math.floor(Math.random() * ANIMATIONS.length)];
   const bgmFilePath = pickBgmFile(style.bgmFolder);
+  const backgroundImage = backgroundImagePath ? await loadImage(backgroundImagePath) : null;
+  const backgroundDraw = backgroundImage ? computeCoverDraw(backgroundImage, WIDTH, HEIGHT) : null;
+  if (signal?.aborted) throw new DOMExceptionLike("canceled");
 
   const canvas = createCanvas(WIDTH, HEIGHT);
   const ctx = canvas.getContext("2d");
@@ -441,11 +469,15 @@ async function renderVideo({ captionText, outPath, signal }) {
       try {
         for (let frame = 0; frame < TOTAL_FRAMES; frame++) {
           if (signal?.aborted) return;
-          ctx.fillStyle = style.accentColorHex;
-          ctx.fillRect(0, 0, WIDTH, HEIGHT);
+          if (backgroundImage) {
+            drawBackgroundImage(ctx, backgroundImage, backgroundDraw);
+          } else {
+            ctx.fillStyle = style.accentColorHex;
+            ctx.fillRect(0, 0, WIDTH, HEIGHT);
+          }
 
           if (frame < HOLD_FRAMES) {
-            // 開始直後0.5秒間（0フレーム目＝プロフィールグリッドのサムネイルを含む）は
+            // 開始直後HOLD_SEC秒間（0フレーム目＝プロフィールグリッドのサムネイルを含む）は
             // タイトルを画面中央に静止表示し、区間の終盤でフェードアウトする。
             const holdT = frame / HOLD_FRAMES;
             drawTitle(ctx, { ...titleFit, textColor, holdT });
@@ -489,7 +521,7 @@ async function renderVideo({ captionText, outPath, signal }) {
   return {
     accentColorHex: style.accentColorHex,
     textColor,
-    contrastRatio: Number(ratio.toFixed(2)),
+    contrastRatio: ratio === null ? null : Number(ratio.toFixed(2)),
     animation,
     bgmFolder: style.bgmFolder,
     bgmFile: path.basename(bgmFilePath),

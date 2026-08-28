@@ -13,11 +13,27 @@ const { getDocsNumber } = require("./generationConfig");
 
 const UPLOAD_DIR = path.join(__dirname, "..", "..", "uploads");
 const VIDEO_RENDER_CONCURRENCY = 2;
+const PUBLIC_UPLOAD_PREFIX = "https://edgeailab.net/uploads/";
 
 const jobs = new Map();
 
 function publicUrlFor(filename) {
-  return `https://edgeailab.net/uploads/${filename}`;
+  return `${PUBLIC_UPLOAD_PREFIX}${filename}`;
+}
+
+// 背景画像アップロード（POST /api/uploads/image、既存の画像アップロード用エンドポイントを
+// 流用）は公開URLを返すが、動画レンダリングは同じコンテナ内で直接ファイルシステムに
+// アクセスできるため、URLをそのままlocalに解決してネットワーク往復を避ける。UPLOAD_DIR
+// 配下のファイル名以外（パストラバーサル・他ホストのURL等）は無視してAI自動生成にフォールバックする。
+function resolveBackgroundImagePath(backgroundImageUrl) {
+  if (typeof backgroundImageUrl !== "string" || !backgroundImageUrl.startsWith(PUBLIC_UPLOAD_PREFIX)) {
+    return null;
+  }
+  const filename = backgroundImageUrl.slice(PUBLIC_UPLOAD_PREFIX.length);
+  if (!filename || filename.includes("/") || filename.includes("..")) {
+    return null;
+  }
+  return path.join(UPLOAD_DIR, filename);
 }
 
 function createJob() {
@@ -77,9 +93,10 @@ async function runWithConcurrency(items, limit, worker) {
  * バックグラウンドで10本の動画生成を進める。呼び出し元は戻り値(job)のidをすぐ
  * クライアントへ返し、GET側はgetJob(jobId)をポーリングする想定。
  */
-function startVideoGenerationJob({ sourceText, url }) {
+function startVideoGenerationJob({ sourceText, url, backgroundImageUrl }) {
   const job = createJob();
   const { signal } = job.abortController;
+  const backgroundImagePath = resolveBackgroundImagePath(backgroundImageUrl);
 
   // 体感速度の遅さの原因切り分け調査用（2026-08-20）。ジョブ全体の各フェーズの所要時間を記録する。
   const __jobT0 = Date.now();
@@ -142,7 +159,7 @@ function startVideoGenerationJob({ sourceText, url }) {
         const outPath = path.join(UPLOAD_DIR, filename);
         const __slotT0 = Date.now();
         try {
-          const style = await renderVideo({ captionText: slot.caption, outPath, signal });
+          const style = await renderVideo({ captionText: slot.caption, outPath, signal, backgroundImagePath });
           console.log(
             `[timing] videoGenerationJobStore slot=${slot.index} startedAtMs=${__slotT0 - __jobT0} ` +
               `durationMs=${Date.now() - __slotT0}`
@@ -179,10 +196,11 @@ function startVideoGenerationJob({ sourceText, url }) {
 }
 
 /** 完了済みの1スロットだけを差し替える（[再作成]ボタン用）。同期的に1本だけレンダリングする。 */
-async function regenerateSingleVideo({ caption }) {
+async function regenerateSingleVideo({ caption, backgroundImageUrl }) {
   const filename = `${crypto.randomUUID()}.mp4`;
   const outPath = path.join(UPLOAD_DIR, filename);
-  const style = await renderVideo({ captionText: caption, outPath });
+  const backgroundImagePath = resolveBackgroundImagePath(backgroundImageUrl);
+  const style = await renderVideo({ captionText: caption, outPath, backgroundImagePath });
   return { url: publicUrlFor(filename), style };
 }
 

@@ -36,7 +36,7 @@ router.post(
       if (!schedule) return;
 
       const useUrl = Boolean(schedule.url_mode);
-      const { sourceText, url } = req.body || {};
+      const { sourceText, url, backgroundImageUrl } = req.body || {};
       if (useUrl) {
         if (typeof url !== "string" || !/^https?:\/\//i.test(url)) {
           return res.status(400).json({ error: "invalid_url" });
@@ -45,7 +45,7 @@ router.post(
         return res.status(400).json({ error: "source_text_required" });
       }
 
-      const job = startVideoGenerationJob({ sourceText, url: useUrl ? url : undefined });
+      const job = startVideoGenerationJob({ sourceText, url: useUrl ? url : undefined, backgroundImageUrl });
       res.json({ jobId: job.id });
     } catch (err) {
       console.error(`[scheduleVideos] generate failed id=${req.params.id}:`, err);
@@ -81,11 +81,11 @@ router.post(
     try {
       const schedule = await loadOwnedSchedule(req, res);
       if (!schedule) return;
-      const { caption } = req.body || {};
+      const { caption, backgroundImageUrl } = req.body || {};
       if (typeof caption !== "string" || !caption.trim()) {
         return res.status(400).json({ error: "caption_required" });
       }
-      const result = await regenerateSingleVideo({ caption });
+      const result = await regenerateSingleVideo({ caption, backgroundImageUrl });
       res.json(result);
     } catch (err) {
       console.error(`[scheduleVideos] regenerate failed id=${req.params.id}:`, err);
