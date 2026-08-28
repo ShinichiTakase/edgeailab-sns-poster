@@ -93,10 +93,14 @@ async function runWithConcurrency(items, limit, worker) {
  * バックグラウンドで10本の動画生成を進める。呼び出し元は戻り値(job)のidをすぐ
  * クライアントへ返し、GET側はgetJob(jobId)をポーリングする想定。
  */
-function startVideoGenerationJob({ sourceText, url, backgroundImageUrl }) {
+function startVideoGenerationJob({ sourceText, url, backgroundImageUrls }) {
   const job = createJob();
   const { signal } = job.abortController;
-  const backgroundImagePath = resolveBackgroundImagePath(backgroundImageUrl);
+  // スロットごとに個別の背景画像を指定できる（2026-08-28追加）。job.slots[i]に対応する
+  // backgroundImageUrls[i]のみを使う（未指定・無効なURLの要素はnullになりAI自動生成にフォールバック）。
+  const backgroundImagePaths = Array.isArray(backgroundImageUrls)
+    ? backgroundImageUrls.map((u) => resolveBackgroundImagePath(u))
+    : [];
 
   // 体感速度の遅さの原因切り分け調査用（2026-08-20）。ジョブ全体の各フェーズの所要時間を記録する。
   const __jobT0 = Date.now();
@@ -159,7 +163,12 @@ function startVideoGenerationJob({ sourceText, url, backgroundImageUrl }) {
         const outPath = path.join(UPLOAD_DIR, filename);
         const __slotT0 = Date.now();
         try {
-          const style = await renderVideo({ captionText: slot.caption, outPath, signal, backgroundImagePath });
+          const style = await renderVideo({
+            captionText: slot.caption,
+            outPath,
+            signal,
+            backgroundImagePath: backgroundImagePaths[slot.index] || null,
+          });
           console.log(
             `[timing] videoGenerationJobStore slot=${slot.index} startedAtMs=${__slotT0 - __jobT0} ` +
               `durationMs=${Date.now() - __slotT0}`

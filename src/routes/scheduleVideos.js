@@ -36,7 +36,7 @@ router.post(
       if (!schedule) return;
 
       const useUrl = Boolean(schedule.url_mode);
-      const { sourceText, url, backgroundImageUrl } = req.body || {};
+      const { sourceText, url, backgroundImageUrls } = req.body || {};
       if (useUrl) {
         if (typeof url !== "string" || !/^https?:\/\//i.test(url)) {
           return res.status(400).json({ error: "invalid_url" });
@@ -45,7 +45,7 @@ router.post(
         return res.status(400).json({ error: "source_text_required" });
       }
 
-      const job = startVideoGenerationJob({ sourceText, url: useUrl ? url : undefined, backgroundImageUrl });
+      const job = startVideoGenerationJob({ sourceText, url: useUrl ? url : undefined, backgroundImageUrls });
       res.json({ jobId: job.id });
     } catch (err) {
       console.error(`[scheduleVideos] generate failed id=${req.params.id}:`, err);
