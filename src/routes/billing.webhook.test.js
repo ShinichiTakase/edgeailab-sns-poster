@@ -29,7 +29,7 @@ mailer.notifyFailure = async (subject, text) => {
 customerStore.getCustomerByStripeCustomerId = async (stripeCustomerId) => customerResolver(stripeCustomerId);
 
 const billingRouter = require("./billing");
-const { handleInvoicePaymentFailed } = billingRouter;
+const { handleInvoicePaymentFailed, handleInvoicePaid } = billingRouter;
 
 test.beforeEach(() => {
   mailCalls = [];
@@ -184,4 +184,54 @@ test("stripeCustomerIdに一致する内部顧客が見つからない → 何�
   assert.equal(stripe._payCallCount(), 0);
   assert.equal(mailCalls.length, 0);
   assert.equal(notifyCalls.length, 0);
+});
+
+// handleInvoicePaid用の最小フェイクStripe（invoices.retrieve/updateのみ使う）。
+function createFakeStripeForSuccess({ total = 3328, hostedInvoiceUrl = "https://stripe.test/invoice-paid" } = {}) {
+  const invoice = { id: "in_success_test", total, hosted_invoice_url: hostedInvoiceUrl, metadata: {} };
+  return {
+    _invoice: invoice,
+    invoices: {
+      async retrieve(id) {
+        assert.equal(id, invoice.id);
+        return { ...invoice };
+      },
+      async update(id, { metadata }) {
+        Object.assign(invoice.metadata, metadata);
+        return { ...invoice };
+      },
+    },
+  };
+}
+
+test("決済成功 → 請求金額の通知メールが1通送信される", async () => {
+  useTestCustomer();
+  const stripe = createFakeStripeForSuccess({ total: 3328 });
+  const event = { id: "evt_success_1", data: { object: { id: stripe._invoice.id, customer: TEST_CUSTOMER.stripeCustomerId } } };
+
+  await handleInvoicePaid(stripe, event);
+
+  assert.equal(mailCalls.length, 1);
+  assert.match(mailCalls[0].text, /3,328円/);
+  assert.equal(stripe._invoice.metadata.payment_succeeded_notified_event_id, "evt_success_1");
+});
+
+test("決済成功通知の同一event.id再送 → 二重送信しない（リグレッション対象）", async () => {
+  useTestCustomer();
+  const stripe = createFakeStripeForSuccess();
+  const event = { id: "evt_success_redelivery", data: { object: { id: stripe._invoice.id, customer: TEST_CUSTOMER.stripeCustomerId } } };
+
+  await handleInvoicePaid(stripe, event);
+  await handleInvoicePaid(stripe, event);
+
+  assert.equal(mailCalls.length, 1, "通知メールは1通だけであること");
+});
+
+test("決済成功: stripeCustomerIdに一致する内部顧客が見つからない → 何もせず終了", async () => {
+  const stripe = createFakeStripeForSuccess();
+  const event = { id: "evt_success_unknown_customer", data: { object: { id: stripe._invoice.id, customer: "cus_totally_unknown" } } };
+
+  await handleInvoicePaid(stripe, event);
+
+  assert.equal(mailCalls.length, 0);
 });

@@ -7,7 +7,7 @@ const { planKey, pricesForPlan } = require("../lib/stripePricing");
 const { computeGraduatedAmount } = require("../lib/stripeTierPricing");
 const { getCurrentBillingCycle, getCombinedPostCounts } = require("../lib/billingCycle");
 const { resolvePriorities, findPrimary, findBackup } = require("../lib/paymentMethodPriority");
-const { BACKUP_CARD_CHARGED_EMAIL } = require("../lib/emailTemplates");
+const { BACKUP_CARD_CHARGED_EMAIL, PAYMENT_SUCCEEDED_EMAIL } = require("../lib/emailTemplates");
 const { sendCustomerMail } = require("../lib/customerMailer");
 const { notifyFailure } = require("../lib/mailer");
 
@@ -65,6 +65,13 @@ router.post("/api/billing/create-checkout-session", requireAuth, express.json(),
       if (trialEndSeconds > nowSeconds + MIN_TRIAL_END_LEAD_SECONDS) {
         subscriptionData.trial_end = trialEndSeconds;
       }
+    }
+    // 消費税（10%、手動作成したTax Rateオブジェクト）。サブスクリプションのdefault_tax_ratesとして
+    // 設定することで、以後の全請求（基本料金・従量料金・Xサーチャージ）に自動で上乗せされる
+    // （Price側のtax_behavior: exclusiveと組み合わせて外税計算になる。2026-08-28追加）。
+    // 未設定時は税なしのまま進める（Checkout Session自体を止めない）。
+    if (process.env.STRIPE_TAX_RATE_ID) {
+      subscriptionData.default_tax_rates = [process.env.STRIPE_TAX_RATE_ID];
     }
 
     const session = await stripe.checkout.sessions.create({
@@ -561,6 +568,48 @@ async function handleInvoicePaymentFailed(stripe, event) {
   }
 }
 
+// invoice.paid ウェブフック本体。決済成功のたびに顧客へ請求金額を通知する（2026-08-28追加）。
+// Stripe側のWebhookエンドポイントには`invoice.payment_succeeded`ではなく`invoice.paid`が
+// 登録済みのため、実装もそれに合わせる（実機で前者を購読していないため発火しないことを確認済み）。
+async function handleInvoicePaid(stripe, event) {
+  const invoice = event.data.object;
+  const stripeCustomerId = typeof invoice.customer === "string" ? invoice.customer : invoice.customer && invoice.customer.id;
+
+  if (!stripeCustomerId) {
+    console.warn(`[billing/webhook] invoice.paid without customer, invoiceId=${invoice.id}`);
+    return;
+  }
+
+  const customer = await customerStore.getCustomerByStripeCustomerId(stripeCustomerId);
+  if (!customer) {
+    console.warn(`[billing/webhook] invoice.paid: no matching customer for stripeCustomerId=${stripeCustomerId} invoiceId=${invoice.id}`);
+    return;
+  }
+
+  // handleInvoicePaymentFailedと同じ理由（Webhook再送対策）で、必ずinvoiceを再取得して
+  // 「現在の」metadataを見る。event.data.objectは生成時点のスナップショットのままのため。
+  const freshInvoice = await stripe.invoices.retrieve(invoice.id);
+  if (freshInvoice.metadata && freshInvoice.metadata.payment_succeeded_notified_event_id === event.id) {
+    console.info(`[billing/webhook] invoice.paid: event ${event.id} already processed for invoice ${invoice.id}, skipping (redelivery)`);
+    return;
+  }
+
+  // 通知メール送信の前にマーカーを書き込む（二重送信より稀な未送信を許容する方針、
+  // handleInvoicePaymentFailedと同様）。
+  await stripe.invoices.update(invoice.id, {
+    metadata: { ...freshInvoice.metadata, payment_succeeded_notified_event_id: event.id },
+  });
+
+  const mailResult = await sendCustomerMail({
+    toEmail: customer.email,
+    subject: PAYMENT_SUCCEEDED_EMAIL.subject,
+    text: PAYMENT_SUCCEEDED_EMAIL.body(freshInvoice.total, freshInvoice.hosted_invoice_url),
+  });
+  if (!mailResult.ok) {
+    console.warn(`[billing/webhook] payment-succeeded notification mail not sent (${mailResult.error}) customerId=${customer.id}`);
+  }
+}
+
 // Stripe Webhookは署名検証のため生ボディが必要なので、このルートだけ
 // express.json()ではなくexpress.raw()をミドルウェアとして適用する。
 router.post("/api/billing/webhook", express.raw({ type: "application/json" }), async (req, res) => {
@@ -595,6 +644,8 @@ router.post("/api/billing/webhook", express.raw({ type: "application/json" }), a
       }
     } else if (event.type === "invoice.payment_failed") {
       await handleInvoicePaymentFailed(stripe, event);
+    } else if (event.type === "invoice.paid") {
+      await handleInvoicePaid(stripe, event);
     }
     res.json({ received: true });
   } catch (err) {
@@ -680,5 +731,6 @@ async function estimateBillingForecast(stripe, customer, prices) {
 // （関数）にプロパティとして公開する。Router自体はapp.use(billingRoutes)でそのまま使われるため、
 // この公開はExpressの動作に影響しない。
 router.handleInvoicePaymentFailed = handleInvoicePaymentFailed;
+router.handleInvoicePaid = handleInvoicePaid;
 
 module.exports = router;

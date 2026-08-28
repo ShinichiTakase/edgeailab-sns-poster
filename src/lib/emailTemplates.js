@@ -106,6 +106,19 @@ const BACKUP_CARD_CHARGED_EMAIL = {
       .join("\n"),
 };
 
+const PAYMENT_SUCCEEDED_EMAIL = {
+  subject: "【EdgeAI Lab】ご請求のお知らせ",
+  body: (amount, invoiceUrl) =>
+    [
+      `今回のご請求金額は ${amount.toLocaleString()}円 で、登録済みのお支払い方法にて決済が完了しました。`,
+      "",
+      "内訳の詳細は、請求情報ページまたは以下の請求書リンクからご確認いただけます。",
+      invoiceUrl ? `\n請求内容: ${invoiceUrl}` : "",
+    ]
+      .filter(Boolean)
+      .join("\n"),
+};
+
 const INVITATION_EMAIL = {
   subject: "【EdgeAI Lab】メンバー招待のお知らせ",
   body: (companyName, acceptUrl) =>
@@ -205,6 +218,7 @@ module.exports = {
   TRIAL_POST_LIMIT_WARNING_EMAIL,
   TRIAL_POST_LIMIT_REACHED_EMAIL,
   BACKUP_CARD_CHARGED_EMAIL,
+  PAYMENT_SUCCEEDED_EMAIL,
   INVITATION_EMAIL,
   APPROVAL_REQUEST_EMAIL,
   APPROVAL_DECIDED_EMAIL,
