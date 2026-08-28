@@ -4,7 +4,7 @@ const { requireAuth, blockViewerRole, blockEditorRole, blockApproverRole } = req
 const { getXSurcharge } = require("../lib/surchargeConfig");
 const { getStripe, ensureStripeCustomer } = require("../lib/stripeClient");
 const { planKey, pricesForPlan } = require("../lib/stripePricing");
-const { computeGraduatedAmount } = require("../lib/stripeTierPricing");
+const { computePriceAmount } = require("../lib/stripeTierPricing");
 const { getCurrentBillingCycle, getCombinedPostCounts } = require("../lib/billingCycle");
 const { resolvePriorities, findPrimary, findBackup } = require("../lib/paymentMethodPriority");
 const { BACKUP_CARD_CHARGED_EMAIL, PAYMENT_SUCCEEDED_EMAIL } = require("../lib/emailTemplates");
@@ -713,8 +713,8 @@ async function estimateBillingForecast(stripe, customer, prices) {
     getCombinedPostCounts(customer, cycle.cycleStart, cycle.cycleEnd),
   ]);
 
-  const usageFee = computeGraduatedAmount(meteredPrice.tiers, combined.totalCount);
-  const xSurcharge = computeGraduatedAmount(meteredXPrice.tiers, combined.xUrlCount);
+  const usageFee = computePriceAmount(meteredPrice, combined.totalCount);
+  const xSurcharge = computePriceAmount(meteredXPrice, combined.xUrlCount);
   return {
     basicFee,
     usageFee,

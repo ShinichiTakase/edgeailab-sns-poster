@@ -51,7 +51,10 @@ function generateReceiptPdf(summary) {
         quantity: line.count,
         unitPrice: line.averageUnitPrice,
         amount: line.amount,
-        note: summary.usageLines.length > 1 ? "平均単価" : undefined,
+        // 従量料金は2段階制（Stripeのgraduated tiers）のため単価が一定でないので、
+        // プラットフォームが1つだけでも平均単価の注記は常に表示する（2026-08-28、
+        // billing-history.htmlの表示形式変更と合わせて条件を統一）。
+        note: "平均単価",
       });
     }
     if (summary.xSurcharge.amount > 0) {

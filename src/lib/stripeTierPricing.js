@@ -27,4 +27,17 @@ function computeGraduatedAmount(tiers, quantity) {
   return total;
 }
 
-module.exports = { computeGraduatedAmount };
+// Priceオブジェクトのbilling_schemeに応じて実額を計算する（2026-08-28追加）。
+// Xサーチャージ用Priceがgraduated（段階制、実質同一単価の2tier）からper_unit（フラット単価）へ
+// 切り替わったことがきっかけ。billing_scheme: "tiered"はcomputeGraduatedAmount、
+// "per_unit"は単純な単価×数量で計算する（Stripe側の定義を都度参照し、アプリ側にハードコード
+// しない設計は維持）。
+function computePriceAmount(price, quantity) {
+  if (!(quantity > 0)) return 0;
+  if (price.billing_scheme === "per_unit") {
+    return (price.unit_amount || 0) * quantity;
+  }
+  return computeGraduatedAmount(price.tiers, quantity);
+}
+
+module.exports = { computeGraduatedAmount, computePriceAmount };
