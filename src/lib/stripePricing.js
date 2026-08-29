@@ -45,4 +45,18 @@ function classifyPriceId(priceId) {
   return null;
 }
 
-module.exports = { planKey, pricesForPlan, classifyPriceId };
+// プラン⇔Invoice Rendering Template IDのマッピング。プランごとに請求書の項目
+// グルーピング・表示順を制御するテンプレート（Stripe Dashboardで作成済み）を、
+// 顧客のinvoice_settings.rendering_options.templateに設定する際に使う。
+const INVOICE_TEMPLATE_ENV_KEYS = {
+  basic: "STRIPE_INVOICE_TEMPLATE_BASIC",
+  standard: "STRIPE_INVOICE_TEMPLATE_STANDARD",
+  advanced: "STRIPE_INVOICE_TEMPLATE_ADVANCED",
+};
+
+function invoiceRenderingTemplateForPlan(plan) {
+  const envKey = INVOICE_TEMPLATE_ENV_KEYS[plan];
+  return (envKey && process.env[envKey]) || null;
+}
+
+module.exports = { planKey, pricesForPlan, classifyPriceId, invoiceRenderingTemplateForPlan };

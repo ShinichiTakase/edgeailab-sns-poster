@@ -2,7 +2,7 @@ const express = require("express");
 const customerStore = require("../lib/customerStore");
 const { requireAuth, blockViewerRole, blockEditorRole, blockApproverRole } = require("../middleware/requireAuth");
 const { getXSurcharge } = require("../lib/surchargeConfig");
-const { getStripe, ensureStripeCustomer } = require("../lib/stripeClient");
+const { getStripe, ensureStripeCustomer, applyInvoiceRenderingTemplate } = require("../lib/stripeClient");
 const { planKey, pricesForPlan } = require("../lib/stripePricing");
 const { computePriceAmount } = require("../lib/stripeTierPricing");
 const { getCurrentBillingCycle, getCombinedPostCounts } = require("../lib/billingCycle");
@@ -43,6 +43,15 @@ router.post("/api/billing/create-checkout-session", requireAuth, express.json(),
 
   try {
     const stripeCustomerId = await ensureStripeCustomer(stripe, req.customer);
+
+    // 請求書の項目グルーピング・表示順を制御するInvoice Rendering Templateをプランに応じて
+    // 設定する。表示上の見た目のみに関わる非本質的な処理のため、失敗してもチェックアウト
+    // 自体は止めない（ログのみ）。
+    try {
+      await applyInvoiceRenderingTemplate(stripe, stripeCustomerId, planKey(req.customer));
+    } catch (err) {
+      console.error(`[billing/create-checkout-session] failed to apply invoice rendering template customerId=${req.customer.id}:`, err);
+    }
 
     // trialEndsAtをStripeのtrial_endにそのまま設定する。これによりbilling_cycle_anchorが
     // 自動的にtrial_endと同じ日付に設定され（Stripe公式ドキュメント「トライアル期間を使用した
@@ -178,6 +187,18 @@ router.post("/api/billing/change-plan", requireAuth, blockViewerRole, blockEdito
         err
       );
       return res.status(500).json({ error: "stripe_error", message: "プラン変更に失敗しました。しばらくしてから再度お試しください。" });
+    }
+
+    // Invoice Rendering Templateも新プランのものに付け替える（呼ぶたびに上書きされるため、
+    // 古いプランのテンプレートIDが残ることはない）。表示上の見た目のみに関わる非本質的な
+    // 処理のため、失敗してもプラン変更自体（課金対象Priceの切り替え）は取り消さない。
+    try {
+      await applyInvoiceRenderingTemplate(stripe, req.customer.stripeCustomerId, targetPlan);
+    } catch (err) {
+      console.error(
+        `[billing/change-plan] failed to apply invoice rendering template customerId=${req.customer.id} to=${targetPlan}:`,
+        err
+      );
     }
   }
 

@@ -2,6 +2,7 @@
 // 各種スクリプトから共通で参照する。
 const Stripe = require("stripe");
 const customerStore = require("./customerStore");
+const { invoiceRenderingTemplateForPlan } = require("./stripePricing");
 
 function getStripe() {
   const key = process.env.STRIPE_SECRET_KEY;
@@ -19,4 +20,16 @@ async function ensureStripeCustomer(stripe, customer) {
   return stripeCustomer.id;
 }
 
-module.exports = { getStripe, ensureStripeCustomer };
+// 顧客のStripe Customerに、プランに対応するInvoice Rendering Templateを設定する。
+// 新規サブスクリプション加入時・プラン変更時の両方から呼ぶ（呼ぶたびに新プランの
+// テンプレートIDへ上書きされるため、古いプランのテンプレートIDが残ることはない）。
+// 対応するテンプレートIDが.envに未設定のプランの場合は何もしない（段階導入を許容する）。
+async function applyInvoiceRenderingTemplate(stripe, stripeCustomerId, plan) {
+  const templateId = invoiceRenderingTemplateForPlan(plan);
+  if (!templateId) return;
+  await stripe.customers.update(stripeCustomerId, {
+    invoice_settings: { rendering_options: { template: templateId } },
+  });
+}
+
+module.exports = { getStripe, ensureStripeCustomer, applyInvoiceRenderingTemplate };
