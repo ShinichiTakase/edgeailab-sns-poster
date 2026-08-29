@@ -1,18 +1,20 @@
 // Stripeの確定済みinvoiceを、請求情報一覧・PDF領収書の両方が使う構造化データに変換する。
 // 一覧APIとPDF生成の両方から共有し、表示ロジックの二重実装を避ける。
 const { classifyPriceId } = require("./stripePricing");
-const { listPostingLogsForCustomer } = require("./postingLogStore");
+const { listPostingLogsForCustomerInRange } = require("./postingLogStore");
 
 const PLATFORM_LABELS = { x: "X", threads: "Threads", facebook: "Facebook", instagram: "Instagram", linkedin: "LinkedIn" };
 
-// invoice line item の period（Unixタイムスタンプ）から、posting_logsのbilling_period形式
-// （"YYYY-MM"）を導出する。period.end はその期間の終了時刻（翌月1日0時であることが多い）
-// のため、1秒引いてから月を判定する。
-function derivePeriodKey(line) {
-  const periodEnd = line.period && line.period.end;
-  if (!periodEnd) return null;
-  const d = new Date((periodEnd - 1) * 1000);
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+// invoice line item の period（Unixタイムスタンプ）を、posting_logsをposted_atで絞り込むための
+// 日時範囲に変換する。billing_cycle_anchorは契約開始日を起算日とし暦月とは一致しないため、
+// 暦月（"YYYY-MM"）に丸めてはならない（丸めると按分対象のposting_logs件数が実際の請求対象と
+// ズレ、平均単価が不正確になる。2026-08-29に実機で発覚: 実際は53件のところ暦月全体の251件で
+// 按分してしまい単価が¥30→¥6と表示された）。
+function derivePeriodRange(line) {
+  const start = line.period && line.period.start;
+  const end = line.period && line.period.end;
+  if (!start || !end) return null;
+  return { start: new Date(start * 1000), end: new Date(end * 1000) };
 }
 
 /**
@@ -23,7 +25,7 @@ async function buildInvoiceSummary(invoice, customerCode) {
   const base = { quantity: 0, unitAmount: 0, amount: 0 };
   let planLabel = null;
   let usageTotalAmount = 0;
-  let usageBillingPeriod = null;
+  let usageBillingPeriodRange = null;
   let usageQuantityFromStripe = 0;
   let xSurchargeAmount = 0;
   let xSurchargeCount = 0;
@@ -44,7 +46,7 @@ async function buildInvoiceSummary(invoice, customerCode) {
     } else if (classification.category === "metered") {
       usageTotalAmount += line.amount;
       usageQuantityFromStripe += line.quantity || 0;
-      if (!usageBillingPeriod) usageBillingPeriod = derivePeriodKey(line);
+      if (!usageBillingPeriodRange) usageBillingPeriodRange = derivePeriodRange(line);
     } else if (classification.category === "meteredX") {
       xSurchargeAmount += line.amount;
       xSurchargeCount += line.quantity || 0;
@@ -57,8 +59,8 @@ async function buildInvoiceSummary(invoice, customerCode) {
   // 各行に按分する。最終行で端数を吸収し、行の合計金額が必ずusageTotalAmount（Stripeの
   // 実請求額）と一致するようにする。
   const usageLines = [];
-  if (usageBillingPeriod && usageTotalAmount > 0) {
-    const logs = await listPostingLogsForCustomer(customerCode, usageBillingPeriod);
+  if (usageBillingPeriodRange && usageTotalAmount > 0) {
+    const logs = await listPostingLogsForCustomerInRange(customerCode, usageBillingPeriodRange.start, usageBillingPeriodRange.end);
     const countsByPlatform = {};
     for (const log of logs) {
       const platform = Array.isArray(log.platform) ? log.platform[0] : log.platform;
