@@ -25,8 +25,8 @@ const PLATFORM_GUIDANCE = {
     "URLを含める場合、実際の文字数によらず短縮URLとして23文字で計算されるため、それを踏まえて280文字に収めること。",
   threads:
     "Threads向け: 文字数上限は500字だが、実際に最後まで読まれるのは3〜5文・150〜250字程度。それを目安に収めること。" +
-    "カジュアルな口語調で書き、文末は質問形式など会話を誘発する結びにすること。" +
-    "ハッシュタグは必ず1〜3個、文末に含めること（省略しないこと）。",
+    "カジュアルな口語調で書き、結びは質問形式など会話を誘発する一文にすること。" +
+    "ハッシュタグは必ず1〜3個、結びの一文のすぐ後に含めること（省略しないこと）。",
   facebook:
     "Facebook向け: 明確な文字数上限はないが、実際に読まれるのは冒頭2〜3文程度で、続きは「…続きを読む」で折りたたまれる。" +
     "最初の1〜2文で要点を伝え、全体は3〜5文程度の簡潔な段落構成にまとめること。",
@@ -57,7 +57,9 @@ function buildSystemPrompt(platforms, url, { reelMode = false } = {}) {
     .map((p) => `- ${p === "instagram" && reelMode ? INSTAGRAM_REEL_GUIDANCE : PLATFORM_GUIDANCE[p]}`)
     .join("\n");
   const urlInstruction = url && !reelMode
-    ? "\n各プラットフォームの投稿文の末尾に、必ず次のURLをそのまま含めてください: " +
+    ? "\n各プラットフォームの投稿文の一番最後（ハッシュタグを付ける場合はハッシュタグより後）に、" +
+      "必ず次のURLをそのまま含めてください。これは口調やハッシュタグ数に関する上記の指示より優先される" +
+      "必須要件であり、URLを省略することは一切禁止です: " +
       url +
       "\nただしInstagramは例外とし、URLを直接記載せず「プロフィールのリンクから」のような案内文言に留めてください" +
       "（Instagram向けの上記指示を優先してください）。"
@@ -76,6 +78,17 @@ function buildSystemPrompt(platforms, url, { reelMode = false } = {}) {
   ]
     .filter(Boolean)
     .join("\n");
+}
+
+// プロンプトで「必ずURLを含める」と指示しても、Threadsだけ結びの質問文・ハッシュタグの
+// 指示と競合してAIがURLを丸ごと省略することが実機で確認された（同一生成バッチでも
+// x/facebook/linkedinは常にURLを含む一方、threadsのみ約半数で欠落。2026-08-31調査）。
+// プロンプト側の指示競合を緩和しても確率的事象は完全には防げないため、生成結果に
+// URLが含まれていない場合はここで機械的に追記し、og:imageリンクプレビューが出ない
+// 事故を確実に防ぐ（Instagramは本文URLが仕様上クリックできないため対象外）。
+function ensureUrlIncluded(text, url) {
+  if (!url || typeof text !== "string" || !text || text.includes(url)) return text;
+  return `${text}\n${url}`;
 }
 
 function buildSchema(platforms) {
@@ -143,7 +156,14 @@ async function generatePostCopy({ sourceText, platforms, url }) {
   if (!textBlock) {
     throw new Error("ai_no_output");
   }
-  return JSON.parse(textBlock.text);
+  const parsed = JSON.parse(textBlock.text);
+  if (url) {
+    for (const platform of platforms) {
+      if (platform === "instagram") continue;
+      parsed[platform] = ensureUrlIncluded(parsed[platform], url);
+    }
+  }
+  return parsed;
 }
 
 function buildVariationsSystemPrompt(platforms, url, count, { reelMode = false } = {}) {
@@ -247,7 +267,11 @@ async function generateVariationsForPlatform(anthropic, { sourceText, platform, 
   if (!textBlock) {
     throw new Error("ai_no_output");
   }
-  return convertVariationsToArrays(JSON.parse(textBlock.text), [platform], count)[platform];
+  const texts = convertVariationsToArrays(JSON.parse(textBlock.text), [platform], count)[platform];
+  if (url && platform !== "instagram") {
+    return texts.map((t) => ensureUrlIncluded(t, url));
+  }
+  return texts;
 }
 
 /**
