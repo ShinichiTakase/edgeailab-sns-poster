@@ -59,6 +59,17 @@ function ensureFontRegistered() {
   fontRegistered = true;
 }
 
+// リール用キャプション生成プロンプト（INSTAGRAM_REEL_GUIDANCE、postCopyGenerator.js）は
+// 絵文字を使わないよう明示していないため、AIが確率的に絵文字を混ぜることがある。
+// NotoSansCJK単体には絵文字グリフが存在せず、そのまま描画すると□（tofu box）になる
+// （2026-09-01、実機で確認）。ensureUrlIncluded（postCopyGenerator.js）と同様、プロンプト
+// 指示だけに頼らずレンダリング直前に機械的に取り除く。
+const EMOJI_PATTERN =
+  /[\u{1F000}-\u{1FFFF}\u{2600}-\u{27BF}\u{2B00}-\u{2BFF}\u{2300}-\u{23FF}\u{FE0F}\u{200D}\u{20E3}]/gu;
+function stripEmoji(text) {
+  return typeof text === "string" ? text.replace(EMOJI_PATTERN, "") : text;
+}
+
 // ---------- Claude APIによる配色・BGM判定 ----------
 
 async function pickVideoStyle({ captionText }) {
@@ -402,6 +413,7 @@ const DRAWERS = { typewriter: drawTypewriter, endroll: drawEndroll, slidein: dra
  */
 async function renderVideo({ captionText, outPath, signal, backgroundImagePath }) {
   ensureFontRegistered();
+  captionText = stripEmoji(captionText);
 
   // 体感速度の遅さの原因切り分け調査用（2026-08-20）。Claude API呼び出し（配色・BGM判定）と
   // 実際のffmpeg/canvasレンダリングの所要時間を分けて記録する。
