@@ -3,6 +3,7 @@ const crypto = require("crypto");
 const fs = require("fs");
 const path = require("path");
 const { savePlatformTokens, deletePlatformTokensByUserId, findDuplicateOwner } = require("../lib/tokenStore");
+const { checkTrialHistoryHit, recordConnectionForHistory } = require("../lib/trialHistoryGuard");
 const pkceStore = require("../lib/pkceStore");
 const { requireAuth, blockExpiredTrial, blockViewerRoleRedirect, blockEditorRoleRedirect, blockApproverRoleRedirect } = require("../middleware/requireAuth");
 const { requireSnsConnectionAvailable } = require("../middleware/snsConnectionGuard");
@@ -138,11 +139,30 @@ router.get("/oauth/facebook/callback", async (req, res) => {
     }
 
     const now = new Date();
-    savePlatformTokens(slug, "facebook", {
+    const tokenData = {
       user_id: userId,
       pages: verifiedPages,
       updated_at: now.toISOString(),
-    });
+    };
+    const pageIds = verifiedPages.map((p) => p.pageId);
+
+    // トライアル中の顧客が、過去に別の顧客が連携したことのあるページを連携しようと
+    // している場合、即座に保存せず本人の明示確認を挟む（詳細はtrialHistoryGuard.js参照）。
+    // findDuplicateOwnerと同じ粒度で、複数ページのうちいずれか1件でもヒットすれば
+    // 今回の連携全体（全ページ）を保留対象にする。
+    const historyHit = await checkTrialHistoryHit("facebook", pageIds, slug);
+    if (historyHit) {
+      const historyToken = crypto.randomBytes(24).toString("hex");
+      pkceStore.put(historyToken, { slug, platform: "facebook", tokenData, identifiers: pageIds });
+      logWarn(
+        `[facebook/callback] trial history hit: slug=${slug} pageId=${historyHit.identifier} previously connected by customerId=${historyHit.firstCustomerId}`
+      );
+      const qs = new URLSearchParams({ trialHistoryReconnect: historyToken, platform: "facebook" });
+      return res.redirect(`/onboarding.html?${qs.toString()}`);
+    }
+
+    savePlatformTokens(slug, "facebook", tokenData);
+    await recordConnectionForHistory("facebook", pageIds, slug, now.toISOString());
 
     logInfo(
       `[facebook/callback] linked slug=${slug} pages=${verifiedPages.map((p) => p.pageName).join(", ")}`

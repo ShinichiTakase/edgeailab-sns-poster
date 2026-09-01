@@ -19,4 +19,15 @@ function isPlatformAvailable(platform, customerId) {
   return Array.isArray(entry.allowedSlugs) && entry.allowedSlugs.includes(customerId);
 }
 
-module.exports = { loadConnectionMode, isPlatformAvailable };
+// SNS連携履歴（snsHistoryStore.js）によるトライアル濫用防止チェックの対象外にする
+// 検証用アカウント。動作確認で同じSNSアカウントを繰り返し連携し直すため、履歴ヒットの
+// たびに確認ダイアログが出てしまうと検証作業に支障が出る（2026-09-01追加）。
+// allowedSlugsをそのまま流用し、新たな設定ファイルは作らない。
+function isKnownTestSlug(customerId) {
+  const config = loadConnectionMode();
+  return Object.values(config).some(
+    (entry) => Array.isArray(entry.allowedSlugs) && entry.allowedSlugs.includes(customerId)
+  );
+}
+
+module.exports = { loadConnectionMode, isPlatformAvailable, isKnownTestSlug };

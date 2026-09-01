@@ -1,6 +1,7 @@
 const express = require("express");
 const crypto = require("crypto");
 const { savePlatformTokens, findDuplicateOwner } = require("../lib/tokenStore");
+const { checkTrialHistoryHit, recordConnectionForHistory } = require("../lib/trialHistoryGuard");
 const pkceStore = require("../lib/pkceStore");
 const { requireAuth, blockExpiredTrial, blockViewerRoleRedirect, blockEditorRoleRedirect, blockApproverRoleRedirect } = require("../middleware/requireAuth");
 const { requireSnsConnectionAvailable } = require("../middleware/snsConnectionGuard");
@@ -84,14 +85,27 @@ router.get("/oauth/linkedin/callback", async (req, res) => {
 
     const now = new Date();
     const expiresAt = new Date(now.getTime() + tokens.expires_in * 1000);
-
-    savePlatformTokens(slug, "linkedin", {
+    const tokenData = {
       user_id: profile.sub,
       username: profile.name || profile.sub,
       access_token: tokens.access_token,
       token_expires_at: expiresAt.toISOString(),
       updated_at: now.toISOString(),
-    });
+    };
+
+    const historyHit = await checkTrialHistoryHit("linkedin", [profile.sub], slug);
+    if (historyHit) {
+      const historyToken = crypto.randomBytes(24).toString("hex");
+      pkceStore.put(historyToken, { slug, platform: "linkedin", tokenData, identifiers: [profile.sub] });
+      console.warn(
+        `[linkedin/callback] trial history hit: slug=${slug} user_id=${profile.sub} previously connected by customerId=${historyHit.firstCustomerId}`
+      );
+      const qs = new URLSearchParams({ trialHistoryReconnect: historyToken, platform: "linkedin" });
+      return res.redirect(`/onboarding.html?${qs.toString()}`);
+    }
+
+    savePlatformTokens(slug, "linkedin", tokenData);
+    await recordConnectionForHistory("linkedin", [profile.sub], slug, now.toISOString());
 
     console.info(`[linkedin/callback] linked slug=${slug} username=${profile.name || profile.sub} expires_at=${expiresAt.toISOString()}`);
     return res.send(SUCCESS_HTML);

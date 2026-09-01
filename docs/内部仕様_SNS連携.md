@@ -1,11 +1,14 @@
 # 内部仕様: SNS連携
 
-最終更新日: 2026-08-25（更新: 連携解除時の未実行予約投稿キャンセルを追加）
+最終更新日: 2026-09-01（更新: トライアル濫用防止のためのSNS連携履歴チェック
+〔sns_history.json〕を追加）
 コード参照: sns-poster/src/routes/snsConnections.js, facebook.js, instagram.js, threads.js,
-x.js, sns-poster/src/lib/tokenStore.js, sns-poster/src/lib/scheduledPostStore.js,
-sns-poster/src/middleware/snsConnectionGuard.js,
+x.js, linkedin.js, sns-poster/src/lib/tokenStore.js, sns-poster/src/lib/snsHistoryStore.js,
+sns-poster/src/lib/trialHistoryGuard.js, sns-poster/src/lib/pkceStore.js,
+sns-poster/src/lib/scheduledPostStore.js, sns-poster/src/middleware/snsConnectionGuard.js,
 sns-poster/src/lib/snsConnectionModeConfig.js, sns-poster/config/snsConnectionMode.json,
-sns-poster/src/lib/planLimitsConfig.js, sns-poster/config/planLimits.json
+sns-poster/src/lib/planLimitsConfig.js, sns-poster/config/planLimits.json,
+sns-poster/src/scripts/backfillSnsHistory.js, edgeailab.net/onboarding.html
 
 ## APIエンドポイント一覧
 
@@ -13,12 +16,13 @@ sns-poster/src/lib/planLimitsConfig.js, sns-poster/config/planLimits.json
 |---|---|---|---|
 | GET | /api/sns-connections | requireAuth | 連携状況取得 |
 | POST | /api/sns-connections/:platform/disconnect | requireAuth, blockViewerRole | 連携解除 |
+| POST | /api/sns-connections/confirm-trial-history-reconnect | requireAuth, blockViewerRole | SNS連携履歴ヒット時の確認ダイアログ確定（2026-09-01追加） |
 | GET | /oauth/facebook/start | requireAuth, blockExpiredTrial, requireSnsConnectionAvailable | OAuth開始 |
 | GET | /oauth/facebook/callback | 不要 | OAuthコールバック |
 | POST | /api/facebook/data-deletion-callback | 不要（署名検証） | Meta必須のデータ削除コールバック |
 | GET | /oauth/instagram/start | 同上 | OAuth開始 |
-| GET | /oauth/instagram/callback | 不要 | OAuthコールバック（アカウント切替判定含む） |
-| POST | /api/instagram/confirm-switch | requireAuth | アカウント切替の確定 |
+| GET | /oauth/instagram/callback | 不要 | OAuthコールバック（アカウント切替判定・SNS連携履歴判定含む） |
+| POST | /api/instagram/confirm-switch | requireAuth | アカウント切替の確定（SNS連携履歴確認との合成フローあり、後述） |
 | POST | /api/instagram/data-deletion-callback | 不要（署名検証） | 同上 |
 | POST | /oauth/instagram/deauthorize | 不要 | 受信ログのみの最小実装（要確認: 未実装に近い） |
 | GET | /oauth/threads/start | requireAuth, blockExpiredTrial, requireSnsConnectionAvailable | OAuth開始 |
@@ -27,6 +31,8 @@ sns-poster/src/lib/planLimitsConfig.js, sns-poster/config/planLimits.json
 | POST | /threads/data-deletion | 不要（署名検証） | 同上 |
 | GET | /oauth/x/authorize | requireAuth, blockExpiredTrial, requireSnsConnectionAvailable | OAuth開始（パスが`authorize`で他3種と非対称） |
 | GET | /oauth/x/callback | 不要 | OAuthコールバック |
+| GET | /oauth/linkedin/start | requireAuth, blockExpiredTrial, requireSnsConnectionAvailable | OAuth開始 |
+| GET | /oauth/linkedin/callback | 不要 | OAuthコールバック |
 
 ## GET /api/sns-connections
 
@@ -131,7 +137,11 @@ sns-poster/src/lib/planLimitsConfig.js, sns-poster/config/planLimits.json
 5. `findDuplicateOwner(platform, identifiers, slug)`で他顧客が既に同一アカウントを
    連携済みでないか確認。重複していれば`/upgrade.html?reason=duplicate_account`へ
    リダイレクト（エラーページを出さず静かにリダイレクト）
-6. `savePlatformTokens`でトークン保存、成功ページ表示
+5.5. `trialHistoryGuard.checkTrialHistoryHit(platform, identifiers, slug)`で
+   SNS連携履歴（`sns_history.json`）を確認。ヒットすれば即保存せず確認ダイアログへ
+   （後述「SNS連携履歴によるトライアル濫用防止」参照。2026-09-01追加）
+6. `savePlatformTokens`でトークン保存、`trialHistoryGuard.recordConnectionForHistory`で
+   `sns_history.json`へ記録、成功ページ表示
 
 ### プラットフォームごとの相違点
 
@@ -232,6 +242,164 @@ id: k22n7qwhimx。過去にmicroCMS管理画面から直接削除された`id: 1
 から直接customersレコードを削除しないこと。** sns-poster自体には運営者向けの管理GUIは
 存在しない。
 
+## SNS連携履歴によるトライアル濫用防止（sns_history.json、2026-09-01追加）
+
+### 背景
+
+`client_tokens.json`はcustomerのライフサイクル（解約・SNS連携解除）と運命を共にする
+ストアであり、「このSNSアカウントは過去にトライアルで使われたことがある」という
+事実がここにしか残らない。そのため、以下の手順でトライアルを無制限に濫用できる
+穴があった:
+
+1. メールAでサインアップ→トライアル取得→SNS連携→トライアル消費
+   （60通到達 or 33日経過）
+2. `POST /api/account/cancel`（解約）または`POST /api/sns-connections/:platform/disconnect`
+   （連携解除。**トライアル切れ・未払いでも実行できてしまう**。`blockExpiredTrial`が
+   付いていない）でトークンを削除
+3. 別メールBで新規サインアップ→まっさらなトライアルを取得
+4. メールBから同じSNSアカウントを連携→`findDuplicateOwner`は"今生きているトークン"
+   しか見ないため検知できず成功
+5. 1〜4を繰り返せば同一SNSアカウントのまま無期限に無料利用できる
+   （Facebook/Instagram/Threads/X/LinkedIn全プラットフォームで同一パターンが成立）
+
+対策として、customerのライフサイクルから独立した永続台帳`json/sns_history.json`を
+新設し、SNS連携時（OAuthコールバック）にこの台帳と照合してトライアル濫用を
+検知・防止する。**disconnect自体にトライアル切れガードを追加する対策案も検討したが、
+`POST /api/account/cancel`（正規の解約導線）はトークンを削除する設計自体が意図的
+なため、そちらを経由されると同じ穴が残る。「解約・連携解除は自由にできるが、
+使い回されたアカウントの再連携でトライアルを検知する」側で対策する方針とした。**
+
+### src/lib/snsHistoryStore.js（永続化層）
+
+- 保存先: `json/sns_history.json`（フラットJSONファイル、`client_tokens.json`と同じ
+  ディレクトリ。docker-compose.ymlでは`json/`ディレクトリ自体がbind mountされている
+  ため、新規ファイルでも追加のマウント設定は不要）
+- キー: `{platform}:{accountId}`（例: `instagram:17841400000000000`）。Facebookのみ
+  `pages[].pageId`単位（1顧客が複数ページを連携可能なため）、他4プラットフォーム
+  （Instagram/X/Threads/LinkedIn）は`user_id`/`sub`単位
+- 値: `{ firstCustomerId, firstConnectedAt }`のみ（アクセストークン等の機微情報は
+  一切持たない）
+- `findOtherCustomerHit(platform, identifiers, currentCustomerId)`:
+  `identifiers`配列（facebookは複数ページ分）のうち、自分以外の顧客が最初に連携した
+  記録が残っているものを探す。`tokenStore.findDuplicateOwner`と同じく最初の1件のみ
+  返す（facebookで複数ページが同時にヒットしても、連携全体〔全ページ〕を保留対象と
+  する粒度で統一）
+- `recordNewIdentifiers(platform, identifiers, customerId, connectedAt)`:
+  未記録のキーのみ追記する。**既に記録がある場合（自分自身の過去の連携を含む）は
+  一切上書きしない**（「最初の連携者・最初の連携日時」を不変の値として扱うため）
+- 想定ユーザー数は最大500件のため、DBではなくJSONファイルで十分な性能が出る想定
+  （client_tokens.jsonと同じ判断）
+
+### src/lib/trialHistoryGuard.js（判定ロジックの共通化）
+
+facebook.js/instagram.js/threads.js/x.js/linkedin.jsの5ファイル全てから使う共通ヘルパー:
+
+- `checkTrialHistoryHit(platform, identifiers, slug)`: `customerStore.getCustomerById`で
+  連携しようとしているcustomerを取得し、**`status === "trial"`の場合のみ**
+  `findOtherCustomerHit`を呼ぶ（既に課金中の顧客が過去に使われたアカウントを
+  連携する分には問題ないため対象外）。加えて`snsConnectionModeConfig.isKnownTestSlug`
+  （後述）に該当するテストアカウントも対象外とし、この場合はヒットしていても
+  `null`を返して確認ダイアログを出さない
+- `recordConnectionForHistory(platform, identifiers, slug, connectedAt)`:
+  `recordNewIdentifiers`を呼ぶだけの薄いラッパー。**こちらは`customer.status`を
+  問わず常に記録する**（トライアル中に限定すると、有料顧客が新規連携したアカウントが
+  台帳に残らず、将来そのアカウントが解約等で解放された際の再利用チェックが効かなく
+  なるため）
+- `revokeTrialAfterHistoryReconnect(slug)`: `customerStore.updateCustomer(slug,
+  { status: ["active"], trialEndsAt: "" })`。**必ず実際にトークンが保存される
+  タイミングと同じ箇所でのみ呼ぶこと**（後述「実行タイミングの制約」参照）。
+  `trialEndsAt`も同時に空にする理由: `status`だけ変えて`trialEndsAt`を残すと、
+  `edgeailab.net/dashboard.html`の`status==="active"`でも`trialDisplayEndsAt`が
+  未来なら「お客様は現在トライアル期間です」と表示する分岐（2026-09-01追加）と
+  矛盾する。空にすることで`requiresPaymentRegistration()`が正しく「支払い未登録」
+  としてブロックし、ダッシュボードの表示も自然に一致する
+
+### snsConnectionModeConfig.js: isKnownTestSlug（テストアカウント除外）
+
+`config/snsConnectionMode.json`の`allowedSlugs`（Dev Mode許可リスト、後述）を
+そのまま流用し、新たな設定ファイルは作らない。動作確認で同じSNSアカウントを
+繰り返し連携し直す検証用アカウント（`biza3cp70`・`k22n7qwhimx`・`eagvpvste2cu`）は、
+履歴ヒットのたびに確認ダイアログが出ると検証作業に支障が出るため対象外にする。
+**ダイアログ判定のみ対象外であり、`sns_history.json`への記録自体は通常通り行われる。**
+
+### 確認ダイアログ（保留フロー）
+
+既存の`pkceStore`（TTL付きmap、10分。単一プロセス運用のためメモリ内で十分。
+`src/lib/pkceStore.js`）と、Instagramの「アカウント切替確認」フロー
+（`pkceStore.put(switchToken, {...})` → `POST /api/instagram/confirm-switch`）と
+同じ設計パターンをそのまま流用している。
+
+- ヒットした場合、コールバックの時点ではトークンを保存せず、取得済みのトークン一式
+  （`tokenData`）と識別子（`identifiers`）を`pkceStore`に一時保管する
+  （`{slug, platform, tokenData, identifiers}`）。プラットフォーム側の認可自体は
+  既に成立済みなので、これを取り消す処理は不要
+- `onboarding.html`へ`?trialHistoryReconnect=<token>&platform=<platform>`付きで
+  リダイレクトし、`showTrialHistoryConfirm()`（switch-confirm-bannerのCSSクラスを
+  そのまま流用した確認バナー）を表示する
+- 本文: 「このアカウントは過去に連携されているので、再連携するとトライアルは
+  終了します」＋「キャンセル」「連携」の2ボタン
+- 「キャンセル」→ 何もしない（`onboarding.html`へ戻るだけ。`pkceStore`のエントリは
+  TTLで自然に失効する）
+- 「連携」→ `POST /api/sns-connections/confirm-trial-history-reconnect`
+  （`snsConnections.js`、5プラットフォーム共通の単一エンドポイント）を呼ぶ
+
+### Instagramのみ発生しうる二重確認の合成
+
+Instagramだけは既存の「アカウント切替確認」フローを持つため、「切替確認」と
+「トライアル履歴確認」が同時に必要になるケースがありうる（現在の連携先と別アカウント
+に切替、かつ切替先が`sns_history.json`にもヒット。悪用パターンとしてはむしろ典型的）。
+
+`confirm-trial-history-reconnect`エンドポイントは、platform==="instagram"の場合のみ
+`getConnectedEntry(slug).instagram`と`tokenData.user_id`を比較し、既存の切替判定
+ロジックを再実行する:
+
+- 切替不要（未連携、または同一アカウント）→ その場で`savePlatformTokens`・
+  `revokeTrialAfterHistoryReconnect`・`recordConnectionForHistory`を実行し`{ok:true}`
+- 切替必要 → **トークン保存もトライアル失効もここでは行わず**、新しい`switchToken`を
+  発行して`pkceStore`に`{slug, tokenData, trialHistoryIdentifiers: identifiers}`を
+  保存し、`{ok:true, needsSwitchConfirm:true, switchToken, from, to}`を返す。
+  フロント（`onboarding.html`）はこれを受けて`?instagramSwitch=...`付きで
+  自身をリロードし、**既存の**`showSwitchConfirm()`にそのまま引き継ぐ（新しい
+  UIを追加していない）
+- `POST /api/instagram/confirm-switch`側は、`pending.trialHistoryIdentifiers`が
+  存在する場合のみ、`savePlatformTokens`の直後に`revokeTrialAfterHistoryReconnect`・
+  `recordNewIdentifiers`を実行する
+
+### 実行タイミングの制約（重要）
+
+`revokeTrialAfterHistoryReconnect`（トライアル失効）は、**確認エンドポイントの中で
+即座に実行してはならない**。Instagramの2段階確認で、1段階目（トライアル履歴確認）の
+「連携」を確定した後、2段階目（アカウント切替確認）を「キャンセル」された場合、
+何も連携されていないのにトライアルだけを失うバグになるため。
+
+このため、`status: ["active"], trialEndsAt: ""`への更新は、**すべての確認を通過し
+実際にトークンが`client_tokens.json`へ保存される処理と全く同じタイミング**
+（`savePlatformTokens`呼び出しの直後）でのみ行う。5プラットフォームすべて
+（確認が1段階のみのX/Threads/LinkedIn/Facebookと、2段階になりうるInstagram）で
+この原則が守られている。
+
+### pkceStore.jsの副作用修正（2026-09-01）
+
+`pkceStore.js`のTTL掃除用`setInterval`が`.unref()`されておらず、このモジュールを
+`require`しただけでプロセスが自然終了しなくなる副作用があった。今回`snsConnections.js`
+（`confirm-trial-history-reconnect`エンドポイント用）が新たに`pkceStore`を
+requireしたことで、`src/routes/snsConnections.test.js`が正常終了せずタイムアウトする
+問題が判明し、`.unref()`を追加して修正した（本番の常駐プロセスとしての挙動には
+影響しない。テスト・単発スクリプト等の短命プロセスで顕在化する問題だった）。
+
+### 初期投入（バックフィル）
+
+`src/scripts/backfillSnsHistory.js`（一回限りのスクリプト）を導入時に実行し、
+既存の`client_tokens.json`の全エントリを`sns_history.json`へ一括投入する。
+
+- `node src/scripts/backfillSnsHistory.js`（引数無し）→ dry-run（投入対象件数の
+  確認のみ、書き込みなし）
+- `node src/scripts/backfillSnsHistory.js --apply` → 実際に投入
+- `recordNewIdentifiers`が未記録のキーのみ追記する設計のため、複数回実行しても
+  安全（冪等）。再実行しても既存データは上書きされない
+- **既知の限界**: 導入前に既に解約・連携解除済みで`client_tokens.json`から消えて
+  しまった過去の連携は、データ自体が残っていないため復元できない
+
 ## プラットフォームごとの保存フィールド
 
 | プラットフォーム | 保存フィールド |
@@ -316,3 +484,8 @@ Meta審査（App Review）自体はまだ完了しておらず現在もDevモー
   post_schedules.platformsに連携解除済みのプラットフォームが残っていても、
   そのプラットフォーム分の新規生成だけが継続的にスキップされ、`not_connected`失敗が
   繰り返されることはない
+- `POST /api/sns-connections/:platform/disconnect`には`blockExpiredTrial`が
+  付いていない（トライアル切れ・未払いでも連携解除自体は実行できる）。これは
+  意図的な設計ではなく、上記「SNS連携履歴によるトライアル濫用防止」の穴の一部として
+  発見されたもの。disconnect側にガードを追加する対策は取らず、SNS連携履歴
+  （`sns_history.json`）側で濫用を検知する方針とした（理由は同セクション参照）

@@ -1,6 +1,7 @@
 const express = require("express");
 const crypto = require("crypto");
 const { savePlatformTokens, findDuplicateOwner, deletePlatformTokensByUserId } = require("../lib/tokenStore");
+const { checkTrialHistoryHit, recordConnectionForHistory } = require("../lib/trialHistoryGuard");
 const pkceStore = require("../lib/pkceStore");
 const { requireAuth, blockExpiredTrial, blockViewerRoleRedirect, blockEditorRoleRedirect, blockApproverRoleRedirect } = require("../middleware/requireAuth");
 const { requireSnsConnectionAvailable } = require("../middleware/snsConnectionGuard");
@@ -82,14 +83,27 @@ router.get("/threads/callback", async (req, res) => {
 
     const now = new Date();
     const expiresAt = new Date(now.getTime() + longLived.expires_in * 1000);
-
-    savePlatformTokens(slug, "threads", {
+    const tokenData = {
       user_id: profile.id,
       username: profile.username,
       access_token: longLived.access_token,
       token_expires_at: expiresAt.toISOString(),
       updated_at: now.toISOString(),
-    });
+    };
+
+    const historyHit = await checkTrialHistoryHit("threads", [profile.id], slug);
+    if (historyHit) {
+      const historyToken = crypto.randomBytes(24).toString("hex");
+      pkceStore.put(historyToken, { slug, platform: "threads", tokenData, identifiers: [profile.id] });
+      console.warn(
+        `[threads/callback] trial history hit: slug=${slug} user_id=${profile.id} previously connected by customerId=${historyHit.firstCustomerId}`
+      );
+      const qs = new URLSearchParams({ trialHistoryReconnect: historyToken, platform: "threads" });
+      return res.redirect(`/onboarding.html?${qs.toString()}`);
+    }
+
+    savePlatformTokens(slug, "threads", tokenData);
+    await recordConnectionForHistory("threads", [profile.id], slug, now.toISOString());
 
     console.info(`[threads/callback] linked slug=${slug} username=${profile.username} expires_at=${expiresAt.toISOString()}`);
     return res.send(SUCCESS_HTML);

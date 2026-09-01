@@ -6,6 +6,13 @@ const { savePlatformTokens, getConnectedEntry, deletePlatformTokensByUserId, fin
 // state(OAuth) と同じ「短命トークン→データ」の仕組みを、アカウント切替確認の
 // 一時保管にもそのまま流用する（用途はPKCE専用ではなく汎用のTTL付きmapのため）。
 const pkceStore = require("../lib/pkceStore");
+const customerStore = require("../lib/customerStore");
+const {
+  checkTrialHistoryHit,
+  recordConnectionForHistory,
+  revokeTrialAfterHistoryReconnect,
+} = require("../lib/trialHistoryGuard");
+const { recordNewIdentifiers } = require("../lib/snsHistoryStore");
 const { requireAuth, blockExpiredTrial, blockViewerRoleRedirect, blockEditorRoleRedirect, blockApproverRoleRedirect } = require("../middleware/requireAuth");
 const { requireSnsConnectionAvailable } = require("../middleware/snsConnectionGuard");
 
@@ -164,6 +171,21 @@ router.get("/oauth/instagram/callback", async (req, res) => {
       updated_at: now.toISOString(),
     };
 
+    // トライアル中の顧客が、過去に別の顧客が連携したことのあるアカウントを連携しようと
+    // している場合、即座に保存せず本人の明示確認を挟む（詳細はtrialHistoryGuard.js参照）。
+    // 下記のアカウント切替確認より先に判定する（切替確認で「連携」を確定した後に、
+    // さらにこちらの確認が必要になるとフローが行ったり来たりしてしまうため）。
+    const historyHit = await checkTrialHistoryHit("instagram", [profile.id], slug);
+    if (historyHit) {
+      const historyToken = crypto.randomBytes(24).toString("hex");
+      pkceStore.put(historyToken, { slug, platform: "instagram", tokenData, identifiers: [profile.id] });
+      logWarn(
+        `[instagram/callback] trial history hit: slug=${slug} user_id=${profile.id} previously connected by customerId=${historyHit.firstCustomerId}`
+      );
+      const qs = new URLSearchParams({ trialHistoryReconnect: historyToken, platform: "instagram" });
+      return res.redirect(`/onboarding.html?${qs.toString()}`);
+    }
+
     // 既にこのslugに別アカウントが連携済みの場合、無言で上書きしない。
     // 2026-08-21に、連携先が別アカウント（edgeai_lab）へ差し替わった状態のまま予約投稿が
     // 実行され、意図した顧客アカウント（shin_tks818）に投稿が反映されない事故が発生したため、
@@ -184,6 +206,7 @@ router.get("/oauth/instagram/callback", async (req, res) => {
     }
 
     savePlatformTokens(slug, "instagram", tokenData);
+    await recordConnectionForHistory("instagram", [profile.id], slug, now.toISOString());
 
     logInfo(`[instagram/callback] linked slug=${slug} username=${profile.username}`);
     return res.send(successHtml(profile.username));
@@ -196,7 +219,7 @@ router.get("/oauth/instagram/callback", async (req, res) => {
 // 上のswitch-pending分岐で保留したアカウント切替を、本人の明示操作で確定させる。
 // tokenは一度きり使用（pkceStore.take）で、かつ発行時のslugと現在ログイン中の顧客が
 // 一致する場合のみ確定できる（第三者がURLを推測してもトークンを盗み見ない限り確定できない）。
-router.post("/api/instagram/confirm-switch", requireAuth, express.json(), (req, res) => {
+router.post("/api/instagram/confirm-switch", requireAuth, express.json(), async (req, res) => {
   const { token } = req.body || {};
   if (!token) return res.status(400).json({ error: "token_required" });
 
@@ -206,6 +229,18 @@ router.post("/api/instagram/confirm-switch", requireAuth, express.json(), (req, 
   }
 
   savePlatformTokens(pending.slug, "instagram", pending.tokenData);
+
+  // トライアル履歴確認（confirm-trial-history-reconnect）の「連携」確定後、さらに
+  // このアカウント切替確認も必要だったケース（合成フロー）。トライアル失効・履歴記録は
+  // 実際にトークンが保存されるこのタイミングまで遅延させてある（詳細は
+  // trialHistoryGuard.jsとdocs/内部仕様_SNS連携.md参照。ここより前の段階で
+  // 「切替確認」自体をキャンセルされた場合、連携していないのにトライアルだけを
+  // 失うバグを避けるため）。
+  if (pending.trialHistoryIdentifiers) {
+    await revokeTrialAfterHistoryReconnect(pending.slug);
+    recordNewIdentifiers("instagram", pending.trialHistoryIdentifiers, pending.slug, new Date().toISOString());
+  }
+
   logInfo(
     `[instagram/callback] linked slug=${pending.slug} username=${pending.tokenData.username} (switch confirmed by user)`
   );

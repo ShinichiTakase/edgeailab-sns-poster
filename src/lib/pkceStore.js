@@ -16,11 +16,14 @@ function take(state) {
   return entry;
 }
 
+// unref(): このタイマーの存在だけでプロセスの終了を妨げないようにする
+// （2026-09-01、pkceStoreを新たにrequireしたsnsConnections.jsのテストが、
+// このintervalのせいでプロセスが自然終了せずタイムアウトする問題が発覚したため）。
 setInterval(() => {
   const now = Date.now();
   for (const [key, value] of store) {
     if (now > value.expiresAt) store.delete(key);
   }
-}, 5 * 60 * 1000);
+}, 5 * 60 * 1000).unref();
 
 module.exports = { put, take };

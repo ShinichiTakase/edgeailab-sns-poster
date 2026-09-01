@@ -1,6 +1,7 @@
 const express = require("express");
 const crypto = require("crypto");
 const { savePlatformTokens, findDuplicateOwner } = require("../lib/tokenStore");
+const { checkTrialHistoryHit, recordConnectionForHistory } = require("../lib/trialHistoryGuard");
 const pkceStore = require("../lib/pkceStore");
 const { requireAuth, blockExpiredTrial, blockViewerRoleRedirect, blockEditorRoleRedirect, blockApproverRoleRedirect } = require("../middleware/requireAuth");
 const { requireSnsConnectionAvailable } = require("../middleware/snsConnectionGuard");
@@ -91,15 +92,30 @@ router.get("/oauth/x/callback", async (req, res) => {
 
     const now = new Date();
     const expiresAt = new Date(now.getTime() + tokens.expires_in * 1000);
-
-    savePlatformTokens(slug, "x", {
+    const tokenData = {
       user_id: profile.id,
       username: profile.username,
       access_token: tokens.access_token,
       refresh_token: tokens.refresh_token,
       token_expires_at: expiresAt.toISOString(),
       updated_at: now.toISOString(),
-    });
+    };
+
+    // トライアル中の顧客が、過去に別の顧客が連携したことのあるアカウントを連携しようと
+    // している場合、即座に保存せず本人の明示確認を挟む（詳細はtrialHistoryGuard.js参照）。
+    const historyHit = await checkTrialHistoryHit("x", [profile.id], slug);
+    if (historyHit) {
+      const historyToken = crypto.randomBytes(24).toString("hex");
+      pkceStore.put(historyToken, { slug, platform: "x", tokenData, identifiers: [profile.id] });
+      console.warn(
+        `[x/callback] trial history hit: slug=${slug} user_id=${profile.id} previously connected by customerId=${historyHit.firstCustomerId}`
+      );
+      const qs = new URLSearchParams({ trialHistoryReconnect: historyToken, platform: "x" });
+      return res.redirect(`/onboarding.html?${qs.toString()}`);
+    }
+
+    savePlatformTokens(slug, "x", tokenData);
+    await recordConnectionForHistory("x", [profile.id], slug, now.toISOString());
 
     console.info(`[x/callback] linked slug=${slug} username=${profile.username} expires_at=${expiresAt.toISOString()}`);
     return res.send(SUCCESS_HTML);
