@@ -5,7 +5,7 @@ const customerStore = require("../lib/customerStore");
 const { sendCustomerMail } = require("../lib/customerMailer");
 const { INVITATION_EMAIL } = require("../lib/emailTemplates");
 const { signSession, setSessionCookie } = require("../lib/jwt");
-const { requireAuth, requireVerified, blockEditorRole, blockApproverRole } = require("../middleware/requireAuth");
+const { requireAuth, requireVerified, blockExpiredTrialJson, blockEditorRole, blockApproverRole } = require("../middleware/requireAuth");
 const { planKey } = require("../lib/stripePricing");
 const { getMaxTeamMembers } = require("../lib/teamMemberLimitsConfig");
 
@@ -48,7 +48,7 @@ function validApproverCandidateIds(customer) {
   );
 }
 
-router.post("/api/team/invite", requireAuth, requireVerified, express.json(), async (req, res) => {
+router.post("/api/team/invite", requireAuth, requireVerified, blockExpiredTrialJson, express.json(), async (req, res) => {
   if (currentUserRole(req.user) !== "管理者") {
     return res.status(403).json({ error: "forbidden" });
   }

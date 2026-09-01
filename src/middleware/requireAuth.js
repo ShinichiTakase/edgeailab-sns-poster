@@ -76,11 +76,35 @@ function requireVerified(req, res, next) {
 // reasonクエリはトライアル経由か否かで出し分け、upgrade.html側の案内文を
 // 実態に合わせる（トライアルを一度も経ていない再登録者に「トライアル期間が
 // 終了しているため」と表示すると事実と異なるため）。
+function paymentRequiredReason(customer) {
+  const status = Array.isArray(customer.status) ? customer.status[0] : customer.status;
+  return status === "trial" ? "trial_expired" : "payment_required";
+}
+
 function blockExpiredTrial(req, res, next) {
   if (requiresPaymentRegistration(req.customer)) {
-    const status = Array.isArray(req.customer.status) ? req.customer.status[0] : req.customer.status;
-    const reason = status === "trial" ? "trial_expired" : "payment_required";
-    return res.redirect(`/upgrade.html?reason=${reason}`);
+    return res.redirect(`/upgrade.html?reason=${paymentRequiredReason(req.customer)}`);
+  }
+  next();
+}
+
+// blockExpiredTrialのJSON版。/api/posts・/api/schedules・/api/ai/*・/api/uploads/image・
+// /api/team/inviteのようにfetch()経由で呼ばれるJSON APIにblockExpiredTrial（302
+// リダイレクト）を挟むと、fetchはリダイレクトを自動追従してupgrade.htmlのHTML本文を
+// 200として受け取ってしまい、呼び出し側のres.json()が失敗して「支払いが必要」という
+// 事実がフロントに一切伝わらないまま原因不明のエラー表示になっていた
+// （2026-09-02、tester01@edgeailab.netでの動作確認で発覚。ワンショット投稿・スケジュール
+// 登録が「投稿文章登録」という無関係な文言で失敗する／スケジュールが無言で登録されない、
+// という形で表面化していた）。ブラウザの直接ナビゲーション（<a href>）で叩かれる
+// /oauth/*/start系はblockExpiredTrial（redirect版）のまま、それ以外のfetch経由API全てを
+// こちらに置き換える。
+function blockExpiredTrialJson(req, res, next) {
+  if (requiresPaymentRegistration(req.customer)) {
+    return res.status(402).json({
+      error: "payment_required",
+      reason: paymentRequiredReason(req.customer),
+      message: "この機能を利用するには、お支払い情報の登録（本契約）が必要です。",
+    });
   }
   next();
 }
@@ -207,6 +231,7 @@ module.exports = {
   requireAuth,
   requireVerified,
   blockExpiredTrial,
+  blockExpiredTrialJson,
   requireUnderTrialPostLimit,
   blockCanceledCustomer,
   blockViewerRole,

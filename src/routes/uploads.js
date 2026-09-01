@@ -2,7 +2,7 @@ const express = require("express");
 const multer = require("multer");
 const path = require("path");
 const crypto = require("crypto");
-const { requireAuth, blockExpiredTrial, blockViewerRole, blockApproverRole } = require("../middleware/requireAuth");
+const { requireAuth, blockExpiredTrialJson, blockViewerRole, blockApproverRole } = require("../middleware/requireAuth");
 
 const router = express.Router();
 
@@ -29,7 +29,7 @@ const upload = multer({
 // Instagram/Facebookの画像付き投稿はGraph APIの仕様上、外部から取得可能な公開URLを
 // 渡す必要があるため、アップロードした画像を/uploadsで静的公開する（src/index.js参照）。
 // メール認証未完了でも画像選択自体は試せるようにする（ブロックするのは実際の投稿・予約のみ）。
-router.post("/api/uploads/image", requireAuth, blockExpiredTrial, blockViewerRole, blockApproverRole, (req, res) => {
+router.post("/api/uploads/image", requireAuth, blockExpiredTrialJson, blockViewerRole, blockApproverRole, (req, res) => {
   upload.single("image")(req, res, (err) => {
     if (err) {
       console.error("[uploads/image] upload failed:", err);

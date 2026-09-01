@@ -2,7 +2,7 @@
 // 生成は数分かかるため、POST /generate はジョブIDのみ即時返し、実際の進捗は
 // GET /jobs/:jobId をクライアント側でポーリングする方式にしている。
 const express = require("express");
-const { requireAuth, requireVerified, blockExpiredTrial, blockViewerRole, blockApproverRole } = require("../middleware/requireAuth");
+const { requireAuth, requireVerified, blockExpiredTrialJson, blockViewerRole, blockApproverRole } = require("../middleware/requireAuth");
 const scheduleStore = require("../lib/scheduleStore");
 const {
   startVideoGenerationJob,
@@ -27,7 +27,7 @@ router.post(
   "/api/schedules/:id/texts/videos/generate",
   requireAuth,
   requireVerified,
-  blockExpiredTrial,
+  blockExpiredTrialJson,
   blockViewerRole, blockApproverRole,
   express.json(),
   async (req, res) => {
@@ -74,7 +74,7 @@ router.post(
   "/api/schedules/:id/texts/videos/regenerate",
   requireAuth,
   requireVerified,
-  blockExpiredTrial,
+  blockExpiredTrialJson,
   blockViewerRole, blockApproverRole,
   express.json(),
   async (req, res) => {

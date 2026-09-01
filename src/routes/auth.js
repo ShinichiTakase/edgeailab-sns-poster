@@ -102,6 +102,13 @@ function safeCustomer(customer) {
         Date.now() - new Date(customer.trialLimitAutoActivatedAt).getTime() <
           TRIAL_LIMIT_AUTO_ACTIVATED_NOTICE_WINDOW_DAYS * 24 * 60 * 60 * 1000
     ),
+    // サーバー側の実ガード（middleware/requireAuth.jsのblockExpiredTrial／
+    // blockExpiredTrialJsonが使うのと同じcustomerStore.requiresPaymentRegistration）と
+    // 完全に同じ判定をフロントに渡す。SNS連携・投稿・スケジュール・メンバー招待の
+    // サイドバーメニューをこの値で無効化する（js/role-nav.jsのinsertRoleNavItems参照。
+    // 2026-09-02追加。それまではメニューが有効なまま押せてしまい、実行した先の画面で
+    // わかりにくいエラーになる／サイレントに失敗するUXになっていた）。
+    paymentRequired: customerStore.requiresPaymentRegistration(customer),
   };
 }
 
