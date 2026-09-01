@@ -18,14 +18,30 @@ const FOOTER_TEXT = "Webはプロフィールから";
 const WIDTH = 1080;
 const HEIGHT = 1920;
 const FPS = 30;
-const DURATION_SEC = 16;
+// 尺（Instagram上での実再生時間＝OUTPUT_DURATION_SEC）が20秒になるよう、FREEZE_SEC分を
+// 差し引いた値を設定する（アニメーションが早すぎて読めないという指摘のため16→18.5に延長、
+// 2026-08-31）。本文アニメーションはactiveT（ACTIVE_FRAMES基準の進行率0〜1）で正規化されて
+// いるため、この延長だけで全アニメーションの実時間が自動的に間延びする。
+// HOLD_SECを1.5→2.5に延長した際（2026-08-31）、HOLD_FRAMESは開始のタイトル表示・終了間際の
+// 無地区間の両方に使われる（ACTIVE_FRAMES = TOTAL_FRAMES - HOLD_FRAMES*2）ため、本文アニメーション
+// の実時間（ACTIVE_FRAMES）を変えないよう、その2倍（延長分1秒×2箇所=2秒）をDURATION_SECにも
+// 加算している。
+const DURATION_SEC = 20.5;
 const TOTAL_FRAMES = FPS * DURATION_SEC;
 // ループ再生時に不自然な切り替わりが目立たないよう、開始・終了付近はテキストなしの
 // 背景のみにする（フッターは常時表示のまま）。タイトル表示は0.5秒では短すぎるという
-// 指摘のため1.5秒に延長した（2026-08-28）。
-const HOLD_SEC = 1.5;
+// 指摘のため1.5秒に延長し（2026-08-28）、それでも読み切れないという指摘のため
+// 2.5秒に再延長した（2026-08-31）。
+const HOLD_SEC = 2.5;
 const HOLD_FRAMES = Math.round(HOLD_SEC * FPS);
 const ACTIVE_FRAMES = TOTAL_FRAMES - HOLD_FRAMES * 2;
+// Instagram側のシームレスなループ再生だと、次の周回が即座に始まって不自然に
+// 感じるという指摘のため、動画終了時点（最終フレーム）の状態をそのまま1.5秒間
+// 保持してから出力を終える（2026-08-30）。音声はこの追加区間より前
+// （DURATION_SEC基準のafade）でフェードアウト済みなので、追加区間は無音になる。
+const FREEZE_SEC = 1.5;
+const FREEZE_FRAMES = Math.round(FREEZE_SEC * FPS);
+const OUTPUT_DURATION_SEC = DURATION_SEC + FREEZE_SEC;
 
 const FONT_FAMILY = "NotoSansCJK";
 let fontRegistered = false;
@@ -292,7 +308,9 @@ function drawFooter(ctx, textColor) {
 
 function drawTypewriter(ctx, { lines, fontSize, lineHeight, textColor, activeT }) {
   const totalChars = lines.reduce((n, l) => n + l.length, 0);
-  const revealT = Math.min(1, activeT / 0.7);
+  // 文字送りが早すぎて読めないという指摘のため、全体の70%→85%の時間をかけて
+  // 出現させるよう緩めた（2026-08-31）。
+  const revealT = Math.min(1, activeT / 0.85);
   const revealCount = Math.round(totalChars * revealT);
   let opacity = 1;
   if (activeT > 0.9) opacity = Math.max(0, 1 - (activeT - 0.9) / 0.1);
@@ -450,7 +468,7 @@ async function renderVideo({ captionText, outPath, signal, backgroundImagePath }
         "-c:a", "aac",
         "-b:a", "128k",
         "-af", `afade=t=in:st=0:d=1,afade=t=out:st=${DURATION_SEC - 1}:d=1`,
-        "-t", String(DURATION_SEC),
+        "-t", String(OUTPUT_DURATION_SEC),
         "-movflags", "+faststart",
         "-y",
       ])
@@ -467,6 +485,21 @@ async function renderVideo({ captionText, outPath, signal, backgroundImagePath }
 
     (async () => {
       try {
+        // ctx.getImageData()も同期・CPUバウンドな処理のため（PNGエンコードよりは
+        // 大幅に軽いが依然として同期処理）、backpressureが発生しない（＝毎フレーム
+        // awaitで止まらない）場合、このループがイベントループを占有し続け、他のHTTP
+        // リクエスト（動画生成キャンセルAPI等）が処理されなくなる。1フレームごとに
+        // イベントループへ制御を返し、他のI/Oが割り込めるようにする。
+        const writeFrame = async (buf) => {
+          const canWrite = frameStream.write(buf);
+          if (!canWrite) {
+            await new Promise((r) => frameStream.once("drain", r));
+          } else {
+            await new Promise((r) => setImmediate(r));
+          }
+        };
+
+        let lastBuf;
         for (let frame = 0; frame < TOTAL_FRAMES; frame++) {
           if (signal?.aborted) return;
           if (backgroundImage) {
@@ -488,18 +521,15 @@ async function renderVideo({ captionText, outPath, signal, backgroundImagePath }
           drawFooter(ctx, textColor);
 
           const imageData = ctx.getImageData(0, 0, WIDTH, HEIGHT);
-          const buf = Buffer.from(imageData.data.buffer, imageData.data.byteOffset, imageData.data.byteLength);
-          const canWrite = frameStream.write(buf);
-          if (!canWrite) {
-            await new Promise((r) => frameStream.once("drain", r));
-          } else {
-            // ctx.getImageData()も同期・CPUバウンドな処理のため（PNGエンコードよりは
-            // 大幅に軽いが依然として同期処理）、backpressureが発生しない（＝毎フレーム
-            // awaitで止まらない）場合、このループがイベントループを占有し続け、他のHTTP
-            // リクエスト（動画生成キャンセルAPI等）が処理されなくなる。1フレームごとに
-            // イベントループへ制御を返し、他のI/Oが割り込めるようにする。
-            await new Promise((r) => setImmediate(r));
-          }
+          lastBuf = Buffer.from(imageData.data.buffer, imageData.data.byteOffset, imageData.data.byteLength);
+          await writeFrame(lastBuf);
+        }
+        // 動画終了時点（最終フレーム）の状態をFREEZE_SEC秒分そのまま保持してから
+        // 出力を終える。ctxへの再描画は行わず、最終フレームのバッファをそのまま
+        // 再送するだけでよい。
+        for (let i = 0; i < FREEZE_FRAMES; i++) {
+          if (signal?.aborted) return;
+          await writeFrame(lastBuf);
         }
         frameStream.end();
       } catch (err) {
@@ -510,7 +540,7 @@ async function renderVideo({ captionText, outPath, signal, backgroundImagePath }
 
   console.log(
     `[timing] videoGenerator.renderVideo styleMs=${__styleMs} renderMs=${Date.now() - __renderT0} ` +
-      `totalFrames=${TOTAL_FRAMES}`
+      `totalFrames=${TOTAL_FRAMES + FREEZE_FRAMES}`
   );
 
   if (signal?.aborted) {
