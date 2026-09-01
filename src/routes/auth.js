@@ -390,6 +390,19 @@ router.post("/api/auth/login", express.json(), async (req, res) => {
       return res.status(401).json({ error: "invalid_credentials" });
     }
 
+    // 解約済みアカウントはログイン自体を拒否する（requireAuth通過後の個別ガード
+    // blockCanceledCustomerはposts.jsの投稿系エンドポイントにしか付いておらず、
+    // ログイン→ダッシュボード閲覧自体は素通りしてしまっていた。解約時に
+    // トークン・カード情報等は削除済みのため実害は限定的だが、本人のセッションが
+    // 復活してしまうのは「解約済み」の実態と矛盾する。再開したい場合はsignup.html
+    // からの再登録（customerStore.reactivateCustomer）に一本化する）。
+    if (customerStore.isCanceled(customer)) {
+      return res.status(403).json({
+        error: "account_canceled",
+        message: "このアカウントは解約済みです。ご利用を再開するには新規登録を行ってください。",
+      });
+    }
+
     const sessionToken = signSession(customer, user);
     setSessionCookie(res, sessionToken);
     // 承認者ロールはログイン直後の初期画面をdashboard.htmlではなくapproval.html
