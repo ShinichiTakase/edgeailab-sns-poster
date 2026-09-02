@@ -9,6 +9,7 @@ const { getConnectedEntry, deletePlatformTokensBySlug } = require("../lib/tokenS
 const { getStripe } = require("../lib/stripeClient");
 const { notifyFailure } = require("../lib/mailer");
 const { listPendingByCustomer, deleteScheduledPost } = require("../lib/scheduledPostStore");
+const { listSchedulesForCustomer, deleteSchedule } = require("../lib/scheduleStore");
 
 const router = express.Router();
 
@@ -19,10 +20,7 @@ function currentUserRole(user) {
 }
 
 // 未実行（status=pending）の予約投稿をまとめて削除する。スケジュール投稿由来・
-// ワンショット予約由来の両方を含む（listPendingByCustomer参照）。post_schedules
-// 定義自体は削除・一時停止しないが、scheduleMaterializer.jsはcustomers.status="canceled"の
-// 顧客を生成対象から除外する（isCanceledガード）ため、解約後に新規のscheduled_postsが
-// 生成されることはない。
+// ワンショット予約由来の両方を含む（listPendingByCustomer参照）。
 // microCMSへの書き込みは並行数が多いと429（Too many requests）で弾かれるため
 // （routes/schedules.jsのtexts/bulk作成時に実際に発生していた）、1件ずつ順番に削除する。
 async function cancelScheduledJobsForCustomer(customerId) {
@@ -31,6 +29,21 @@ async function cancelScheduledJobsForCustomer(customerId) {
     await deleteScheduledPost(post.id);
   }
   return pending.length;
+}
+
+// 継続投稿の定義（post_schedules）自体を削除する。以前は「scheduleMaterializer.jsが
+// customers.status="canceled"の顧客を生成対象から除外する（isCanceledガード）ため
+// 削除不要」としていたが、これは同一customerIdでの再サインアップ（reactivateCustomer）
+// を考慮しておらず、再登録して本契約が完了した瞬間にisCanceled/requiresPaymentRegistration
+// ガードが外れ、解約前の古いスケジュール定義がそのまま生成・投稿を再開してしまう
+// 実害のある不具合になっていた（2026-09-02発覚、biza3cp70で実機確認。解約前のスケジュールが
+// 再登録後に実際に投稿まで進んでいた）。予約投稿と同じ理由で1件ずつ順番に削除する。
+async function deleteSchedulesForCustomer(customerId) {
+  const schedules = await listSchedulesForCustomer(customerId);
+  for (const schedule of schedules) {
+    await deleteSchedule(schedule.id);
+  }
+  return schedules.length;
 }
 
 router.post("/api/account/cancel", requireAuth, async (req, res) => {
@@ -48,7 +61,17 @@ router.post("/api/account/cancel", requireAuth, async (req, res) => {
     if (customer.stripeSubscriptionId) {
       if (stripe) {
         try {
-          await stripe.subscriptions.cancel(customer.stripeSubscriptionId);
+          // invoice_now: trueで、解約時点までにStripe Billing Meterへ報告済みだが
+          // まだ請求書化されていない従量分（投稿数・Xサーチャージ）を最終請求書として
+          // 即座に確定させる。指定しないと当期分の従量課金がそのまま切り捨てられ、
+          // 一切請求されずに解約できてしまう（2026-09-02発覚、実際に投稿99件分の
+          // meter eventが未請求のまま解約されたことをStripe側で確認）。
+          // prorate: falseは基本料金（固定費）側の日割り調整をしないため
+          // （基本料金は月初一括請求済みで日割り返金の対象外という既存の請求方針に合わせる）。
+          await stripe.subscriptions.cancel(customer.stripeSubscriptionId, {
+            invoice_now: true,
+            prorate: false,
+          });
         } catch (err) {
           console.error(
             `[account/cancel] Stripe subscription cancel failed customerId=${customer.id} subscriptionId=${customer.stripeSubscriptionId}:`,
@@ -133,6 +156,9 @@ router.post("/api/account/cancel", requireAuth, async (req, res) => {
 
     const canceledScheduledPostCount = await cancelScheduledJobsForCustomer(customer.id);
     console.info(`[account/cancel] canceled pending scheduled posts customerId=${customer.id} count=${canceledScheduledPostCount}`);
+
+    const deletedScheduleCount = await deleteSchedulesForCustomer(customer.id);
+    console.info(`[account/cancel] deleted post_schedules customerId=${customer.id} count=${deletedScheduleCount}`);
 
     // clearSessionCookieはブラウザにCookie削除を指示するだけでJWT自体は失効させないため、
     // resetPassword/changePasswordと同様にusers[].sessionVersionを全員分インクリメントし、
