@@ -136,6 +136,40 @@ crontab登録は`/etc/cron.d/edgeailab-net-orphan-sns-token-check`に日次（�
 
 詳細は[docs/内部仕様_SNS連携.md](docs/内部仕様_SNS連携.md)参照。
 
+## 解約後のカード削除遅延・24時間再登録ロック（cron、2026-09-02追加）
+解約時にStripeへの最終請求書決済（`invoice_now: true`→`finalizeInvoice`→`pay`、
+[src/routes/account.js](src/routes/account.js)）は即時実行するが、**カード情報
+（Stripe PaymentMethod）のdetachは解約直後ではなく解約から23:30後に遅延**させている。
+決済がその場で完了しない場合のStripe側リトライ等に猶予を持たせるため。これに合わせ、
+**同一メールアドレスでの再登録も解約から24時間ロック**する（猶予期間中に再登録して
+古いStripe Customer/カードを引き継いだ状態で利用されるのを防ぐため。
+[src/routes/auth.js](src/routes/auth.js)の`recently_canceled`エラー）。
+
+`config/snsConnectionMode.json`の`isKnownTestSlug`に載っている検証用アカウント
+（動作確認で頻繁に解約・再登録を繰り返すため）は24時間ロックの対象外。
+
+`sns-poster-canceled-card-cleanup`
+（[src/scripts/canceledCardCleanup.js](src/scripts/canceledCardCleanup.js)）も同様に
+`profiles: manual`サービス。解約済み（`status: canceled`）かつ`canceledAt`から
+23:30経過した顧客のカードを検出しdetachする。実際のcrontab登録は
+`/etc/cron.d/edgeailab-net-canceled-card-cleanup`に毎時（**45分**）で実施済み。登録例：
+
+```
+45 * * * * cd /opt/project/deploy/xserver-vps && docker compose run --rm sns-poster-canceled-card-cleanup
+```
+
+**要対応（2026-09-02時点で未対応）**: microCMSの`customers`スキーマに`canceledAt`
+フィールド（テキスト、ISO日時文字列。既存の`trialEndsAt`と同じ形式）が存在しない。
+`customerStore.js`の`updateCustomer`が持つ「未定義フィールドは除外して再試行する」
+フォールバック（2026-08-25の重複課金事故を受けて追加済み）により書き込みエラーには
+ならないが、`canceledAt`自体が一切保存されないため、**このフィールドを追加するまで
+24時間ロック・カード削除の遅延削除のどちらも実質的に無効**（＝カードが自動削除
+されなくなる、24時間ロックもかからない）。フィールド追加は
+[docs/内部仕様_解約.md](docs/内部仕様_解約.md)参照。
+
+詳細は[docs/内部仕様_解約.md](docs/内部仕様_解約.md)・
+[docs/外部仕様_解約.md](docs/外部仕様_解約.md)参照。
+
 ## Instagram Reels投稿の削除不可
 Instagram Graph APIは公開済みメディアの削除エンドポイントを提供していない
 （`DELETE /{media-id}`は`Unsupported delete request`エラーになる。実機検証済み、
