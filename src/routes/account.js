@@ -91,10 +91,43 @@ router.post("/api/account/cancel", requireAuth, async (req, res) => {
           // meter eventが未請求のまま解約されたことをStripe側で確認）。
           // prorate: falseは基本料金（固定費）側の日割り調整をしないため
           // （基本料金は月初一括請求済みで日割り返金の対象外という既存の請求方針に合わせる）。
-          await stripe.subscriptions.cancel(customer.stripeSubscriptionId, {
+          const canceledSubscription = await stripe.subscriptions.cancel(customer.stripeSubscriptionId, {
             invoice_now: true,
             prorate: false,
           });
+
+          // invoice_now: trueは最終請求書を"draft"状態で作るだけで、自動では
+          // finalize（draft→open）も決済も行わない（Stripeはauto_advance:trueの
+          // draft請求書を既定で作成の約1時間後に自動finalizeするが、それでは解約と
+          // 同時に課金されない）。finalizeInvoiceで即座にopenへ進め、続けてpayで
+          // その場で決済を試みる（2026-09-02発覚、実際に作成されたdraft請求書が
+          // 未決済のまま残っていたことをStripe側で確認。カードdetachより前に
+          // 実行するため、この時点ではまだカードが有効）。
+          if (canceledSubscription.latest_invoice) {
+            const invoiceId = canceledSubscription.latest_invoice;
+            try {
+              await stripe.invoices.finalizeInvoice(invoiceId);
+              await stripe.invoices.pay(invoiceId);
+            } catch (invoiceErr) {
+              console.error(
+                `[account/cancel] final invoice finalize/pay failed customerId=${customer.id} invoiceId=${invoiceId}:`,
+                invoiceErr
+              );
+              await notifyFailure(
+                "[edgeailab] 解約処理で最終請求書の決済エラー",
+                [
+                  `customerId: ${customer.id}`,
+                  `email: ${customer.email}`,
+                  `invoiceId: ${invoiceId}`,
+                  `エラー: ${invoiceErr.message}`,
+                  "",
+                  "サブスクリプション自体は解約済みですが、解約時点までの従量料金を",
+                  "含む最終請求書の決済に失敗しました（カード拒否等）。Stripe管理画面で",
+                  "個別に請求書の状態を確認し、必要に応じて手動決済してください。",
+                ].join("\n")
+              );
+            }
+          }
         } catch (err) {
           console.error(
             `[account/cancel] Stripe subscription cancel failed customerId=${customer.id} subscriptionId=${customer.stripeSubscriptionId}:`,
