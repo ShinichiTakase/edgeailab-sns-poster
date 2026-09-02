@@ -187,40 +187,14 @@ router.post("/api/account/cancel", requireAuth, async (req, res) => {
       }
     }
 
-    // 解約後もStripe Customerにカードが残り続けないよう、登録済みの
-    // カード情報（PaymentMethod）をすべてdetachする（FAQ「解約した場合は
-    // 自動的にカード情報は削除されます」の実体）。
-    if (customer.stripeCustomerId) {
-      if (stripe) {
-        try {
-          const cards = await stripe.paymentMethods.list({ customer: customer.stripeCustomerId, type: "card" });
-          for (const pm of cards.data) {
-            await stripe.paymentMethods.detach(pm.id);
-          }
-        } catch (err) {
-          console.error(
-            `[account/cancel] failed to detach cards customerId=${customer.id} stripeCustomerId=${customer.stripeCustomerId}:`,
-            err
-          );
-          await notifyFailure(
-            "[edgeailab] 解約処理でStripe連携エラー",
-            [
-              `customerId: ${customer.id}`,
-              `email: ${customer.email}`,
-              `stripeCustomerId: ${customer.stripeCustomerId}`,
-              `エラー: ${err.message}`,
-              "",
-              "customers.statusはcanceledに更新されますが、Stripe側のカード情報が",
-              "削除されずに残っています。Stripe管理画面で手動削除してください。",
-            ].join("\n")
-          );
-        }
-      } else {
-        console.error(
-          `[account/cancel] Stripe not configured, could not detach cards customerId=${customer.id}`
-        );
-      }
-    }
+    // カード情報（PaymentMethod）のdetachは、解約直後ではなく解約から23:30後に
+    // scripts/canceledCardCleanup.js（cron）で行う（2026-09-02変更。それまでは
+    // ここで即時detachしていたが、直前の最終請求書決済（invoice_now: true→
+    // finalizeInvoice→pay）が何らかの理由で完了していない場合に備え、Stripe側の
+    // 自動リトライ等が完了する猶予を持たせるため。詳細はcustomerStore.js の
+    // isPastCardDeletionDelay・CARD_DELETION_DELAY_MS参照）。FAQ「解約した場合は
+    // 自動的にカード情報は削除されます」自体は変わらず成立する（タイミングが
+    // 遅延するだけ）。
 
     const entry = getConnectedEntry(customer.id);
     for (const platform of PLATFORMS) {
@@ -238,9 +212,13 @@ router.post("/api/account/cancel", requireAuth, async (req, res) => {
       ...u,
       sessionVersion: (Number(u.sessionVersion) || 0) + 1,
     }));
+    // canceledAt: 24時間の再登録ロック（customerStore.isWithinCancellationLock、
+    // auth.js参照）とカード削除の23:30遅延（isPastCardDeletionDelay、
+    // scripts/canceledCardCleanup.js参照）の両方の起点。2026-09-02追加。
     await customerStore.updateCustomer(customer.id, {
       status: ["canceled"],
       users: invalidatedUsers,
+      canceledAt: new Date().toISOString(),
     });
 
     clearSessionCookie(res);
@@ -250,7 +228,7 @@ router.post("/api/account/cancel", requireAuth, async (req, res) => {
     // バックグラウンドで実行する。microCMSへの429対策で1件ずつ順番にDELETEするため、
     // 履歴の多い顧客（実機ではscheduled_posts 387件・posting_logs 395件・
     // schedule_texts 70件で合計3分超）だとnginx-proxyのタイムアウトを超えてしまい、
-    // 実際には解約処理自体（Stripe解約・カード削除・SNSトークン削除・セッション無効化・
+    // 実際には解約処理自体（Stripe解約・最終請求書決済・SNSトークン削除・セッション無効化・
     // status更新）は完了しているのに、クライアントには「解約処理に失敗しました」という
     // 誤ったエラー表示になっていた（2026-09-02発覚、shin.takase@icloud.comの実解約で
     // 確認。処理自体は約3分後にバックグラウンドで正常完了していた）。この時点で
@@ -278,7 +256,7 @@ router.post("/api/account/cancel", requireAuth, async (req, res) => {
             `email: ${customer.email}`,
             `エラー: ${err.message}`,
             "",
-            "解約自体（Stripe解約・カード削除・SNSトークン削除・セッション無効化・",
+            "解約自体（Stripe解約・最終請求書決済・SNSトークン削除・セッション無効化・",
             "status更新）は完了済みですが、投稿一覧・スケジュール定義の削除が途中で",
             "失敗した可能性があります。必要に応じてmicroCMS管理画面で手動確認してください。",
           ].join("\n")

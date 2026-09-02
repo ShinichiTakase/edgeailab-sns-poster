@@ -564,6 +564,36 @@ function isCanceled(customer) {
   return status === "canceled";
 }
 
+// 解約から同一メールアドレスでの再登録を24時間ロックする（signup.js参照。
+// 2026-09-02追加。解約と同時にStripeへ最終請求書の決済を試みるが、失敗時の
+// Stripe側リトライ等に猶予を持たせるため、カード情報の削除も解約直後ではなく
+// 解約から23:30後に遅延させる＝それまでは解約済みでもカードが残っている。この間に
+// 即座に同一メールで再登録できてしまうと、古いStripe Customer/カードを引き継いだ
+// 状態で新しいトライアル相当の利用ができてしまうため、24時間はロックする）。
+const RECENT_CANCELLATION_LOCK_MS = 24 * 60 * 60 * 1000;
+// カード情報の削除を解約から遅延させる猶予（23:30 = 23時間30分）。Stripeへの
+// 最終請求書決済（account.js）が完了するのに十分な時間を確保しつつ、24時間の
+// 再登録ロックが解ける直前にはカードが無くなっている状態にするための値。
+const CARD_DELETION_DELAY_MS = (23 * 60 + 30) * 60 * 1000;
+
+// customer.canceledAtがmicroCMSスキーマ未対応で書き込めていない場合は、
+// 常にfalse（＝制限しない／削除しない）を返す安全側フォールバックとする。
+// 2026-08-25に発生した「未定義フィールドのため判定が常に一方向に倒れて
+// 重複課金を招いた」事故（trialLimitAutoActivatedAt、CLAUDE.md参照）の教訓を踏まえ、
+// この機能は「フィールドが無ければ何もしない」側に倒す（誤ってロック/削除し
+// 続けるより、機能が無効なままの方が安全）。
+function isWithinCancellationLock(customer) {
+  if (!customer.canceledAt) return false;
+  return Date.now() - new Date(customer.canceledAt).getTime() < RECENT_CANCELLATION_LOCK_MS;
+}
+
+// scripts/canceledCardCleanup.js（cron）から使う。解約後23:30を過ぎた
+// カード削除待ちの顧客を判定する純粋関数。
+function isPastCardDeletionDelay(customer) {
+  if (!customer.canceledAt) return false;
+  return Date.now() - new Date(customer.canceledAt).getTime() >= CARD_DELETION_DELAY_MS;
+}
+
 // customers.trialPostCount フィールドをdelta件分だけ加算する。
 // ループ内で複数回呼ぶと「req.customerの値が更新されないまま同じ古い値+1を
 // 複数回書き込んでしまう」バグになるため、呼び出し側は成功件数を集計してから
@@ -666,6 +696,8 @@ module.exports = {
   crossedTrialPostLimitWarning,
   crossedTrialPostLimit,
   isCanceled,
+  isWithinCancellationLock,
+  isPastCardDeletionDelay,
   bumpTrialPostCount,
   listCustomersForTrialReminder,
   listCustomersOverTrialPostLimit,

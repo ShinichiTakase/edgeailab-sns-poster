@@ -9,6 +9,7 @@ const { requireAuth } = require("../middleware/requireAuth");
 const { loadStore } = require("../lib/tokenStore");
 const { getStripe } = require("../lib/stripeClient");
 const { planKey } = require("../lib/stripePricing");
+const { isKnownTestSlug } = require("../lib/snsConnectionModeConfig");
 
 const router = express.Router();
 
@@ -152,6 +153,23 @@ router.post("/api/auth/signup", express.json(), async (req, res) => {
       : null;
     if (existing && existingStatus !== "canceled") {
       return res.status(409).json({ error: "email_exists" });
+    }
+
+    // 解約から24時間は同一メールアドレスでの再登録を禁止する（2026-09-02追加）。
+    // 解約と同時にStripeへ最終請求書の決済を試みるが、失敗時のリトライ等に
+    // 猶予を持たせるためカード削除自体は解約から23:30後に遅らせている
+    // （customerStore.CARD_DELETION_DELAY_MS参照）。その猶予期間中に即座に
+    // 再登録できてしまうと、古いStripe Customer/カードを引き継いだ状態で
+    // 新しいトライアル相当の利用ができてしまうため、24時間はロックする。
+    // isKnownTestSlug（config/snsConnectionMode.json）に載っている検証用アカウントは
+    // 動作確認のたびに24時間待つと支障が出るため対象外にする。
+    if (existing && existingStatus === "canceled" && !isKnownTestSlug(existing.id)) {
+      if (customerStore.isWithinCancellationLock(existing)) {
+        return res.status(409).json({
+          error: "recently_canceled",
+          message: "解約から24時間は同じメールアドレスでの再登録はできません。しばらくしてから再度お試しください。",
+        });
+      }
     }
 
     const passwordHash = await bcrypt.hash(password, BCRYPT_ROUNDS);
