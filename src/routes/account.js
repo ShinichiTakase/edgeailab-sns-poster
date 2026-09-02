@@ -177,18 +177,6 @@ router.post("/api/account/cancel", requireAuth, async (req, res) => {
       }
     }
 
-    const deletedScheduledPostCount = await deleteAllScheduledPostsForCustomer(customer.id);
-    console.info(`[account/cancel] deleted scheduled posts customerId=${customer.id} count=${deletedScheduledPostCount}`);
-
-    const deletedPostingLogCount = await deletePostingLogsForCustomer(customer.id);
-    console.info(`[account/cancel] deleted posting logs customerId=${customer.id} count=${deletedPostingLogCount}`);
-
-    const { scheduleCount: deletedScheduleCount, textCount: deletedScheduleTextCount } =
-      await deleteSchedulesForCustomer(customer.id);
-    console.info(
-      `[account/cancel] deleted post_schedules customerId=${customer.id} scheduleCount=${deletedScheduleCount} textCount=${deletedScheduleTextCount}`
-    );
-
     // clearSessionCookieはブラウザにCookie削除を指示するだけでJWT自体は失効させないため、
     // resetPassword/changePasswordと同様にusers[].sessionVersionを全員分インクリメントし、
     // 発行済みの全セッション（本人・招待メンバー全員、他デバイス・他ブラウザ含む）を
@@ -205,6 +193,46 @@ router.post("/api/account/cancel", requireAuth, async (req, res) => {
 
     clearSessionCookie(res);
     res.json({ ok: true });
+
+    // ここから先（投稿一覧・スケジュール定義の全件物理削除）はレスポンス送出後に
+    // バックグラウンドで実行する。microCMSへの429対策で1件ずつ順番にDELETEするため、
+    // 履歴の多い顧客（実機ではscheduled_posts 387件・posting_logs 395件・
+    // schedule_texts 70件で合計3分超）だとnginx-proxyのタイムアウトを超えてしまい、
+    // 実際には解約処理自体（Stripe解約・カード削除・SNSトークン削除・セッション無効化・
+    // status更新）は完了しているのに、クライアントには「解約処理に失敗しました」という
+    // 誤ったエラー表示になっていた（2026-09-02発覚、shin.takase@icloud.comの実解約で
+    // 確認。処理自体は約3分後にバックグラウンドで正常完了していた）。この時点で
+    // status=canceledかつSNSトークンも削除済みで実害のあるガードは既にかかっているため、
+    // 以降の履歴削除に多少時間がかかっても顧客体験上は問題ない。
+    (async () => {
+      try {
+        const deletedScheduledPostCount = await deleteAllScheduledPostsForCustomer(customer.id);
+        console.info(`[account/cancel] deleted scheduled posts customerId=${customer.id} count=${deletedScheduledPostCount}`);
+
+        const deletedPostingLogCount = await deletePostingLogsForCustomer(customer.id);
+        console.info(`[account/cancel] deleted posting logs customerId=${customer.id} count=${deletedPostingLogCount}`);
+
+        const { scheduleCount: deletedScheduleCount, textCount: deletedScheduleTextCount } =
+          await deleteSchedulesForCustomer(customer.id);
+        console.info(
+          `[account/cancel] deleted post_schedules customerId=${customer.id} scheduleCount=${deletedScheduleCount} textCount=${deletedScheduleTextCount}`
+        );
+      } catch (err) {
+        console.error(`[account/cancel] background history cleanup failed customerId=${customer.id}:`, err);
+        await notifyFailure(
+          "[edgeailab] 解約処理の後片付け（投稿一覧・スケジュール削除）でエラー",
+          [
+            `customerId: ${customer.id}`,
+            `email: ${customer.email}`,
+            `エラー: ${err.message}`,
+            "",
+            "解約自体（Stripe解約・カード削除・SNSトークン削除・セッション無効化・",
+            "status更新）は完了済みですが、投稿一覧・スケジュール定義の削除が途中で",
+            "失敗した可能性があります。必要に応じてmicroCMS管理画面で手動確認してください。",
+          ].join("\n")
+        ).catch(() => {});
+      }
+    })();
   } catch (err) {
     console.error(`[account/cancel] failed customerId=${customer.id}:`, err);
     res.status(500).json({ error: "internal_error", message: "解約処理に失敗しました。しばらくしてから再度お試しください。" });
