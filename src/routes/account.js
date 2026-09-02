@@ -8,8 +8,10 @@ const { clearSessionCookie } = require("../lib/jwt");
 const { getConnectedEntry, deletePlatformTokensBySlug } = require("../lib/tokenStore");
 const { getStripe } = require("../lib/stripeClient");
 const { notifyFailure } = require("../lib/mailer");
-const { listPendingByCustomer, deleteScheduledPost } = require("../lib/scheduledPostStore");
+const { listAllScheduledPostsForCustomer, deleteScheduledPost } = require("../lib/scheduledPostStore");
 const { listSchedulesForCustomer, deleteSchedule } = require("../lib/scheduleStore");
+const { listScheduleTexts, deleteScheduleText } = require("../lib/scheduleTextStore");
+const { listAllPostingLogsForCustomer, deletePostingLog } = require("../lib/postingLogStore");
 
 const router = express.Router();
 
@@ -19,31 +21,52 @@ function currentUserRole(user) {
   return Array.isArray(user.role) ? user.role[0] : user.role;
 }
 
-// 未実行（status=pending）の予約投稿をまとめて削除する。スケジュール投稿由来・
-// ワンショット予約由来の両方を含む（listPendingByCustomer参照）。
+// 予約投稿（scheduled_posts）を全件削除する。以前はstatus=pending分のみ削除し、
+// done/failed（投稿一覧・請求内訳計算用の実績履歴）は残す設計だったが、解約は
+// 顧客データの物理削除として扱うべきという方針に変更したため全件削除に変更した
+// （2026-09-02。post-list.htmlの投稿一覧・billing-history.htmlの請求内訳表示は
+// いずれも解約後はcustomersレコードごと消えてログイン自体できなくなるため、
+// 履歴を残す実利はない）。スケジュール投稿由来・ワンショット予約由来の両方を含む。
 // microCMSへの書き込みは並行数が多いと429（Too many requests）で弾かれるため
 // （routes/schedules.jsのtexts/bulk作成時に実際に発生していた）、1件ずつ順番に削除する。
-async function cancelScheduledJobsForCustomer(customerId) {
-  const pending = await listPendingByCustomer(customerId);
-  for (const post of pending) {
+async function deleteAllScheduledPostsForCustomer(customerId) {
+  const posts = await listAllScheduledPostsForCustomer(customerId);
+  for (const post of posts) {
     await deleteScheduledPost(post.id);
   }
-  return pending.length;
+  return posts.length;
 }
 
-// 継続投稿の定義（post_schedules）自体を削除する。以前は「scheduleMaterializer.jsが
-// customers.status="canceled"の顧客を生成対象から除外する（isCanceledガード）ため
-// 削除不要」としていたが、これは同一customerIdでの再サインアップ（reactivateCustomer）
-// を考慮しておらず、再登録して本契約が完了した瞬間にisCanceled/requiresPaymentRegistration
-// ガードが外れ、解約前の古いスケジュール定義がそのまま生成・投稿を再開してしまう
-// 実害のある不具合になっていた（2026-09-02発覚、biza3cp70で実機確認。解約前のスケジュールが
-// 再登録後に実際に投稿まで進んでいた）。予約投稿と同じ理由で1件ずつ順番に削除する。
+// 投稿済みログ（posting_logs）を全件削除する（2026-09-02追加。理由は
+// deleteAllScheduledPostsForCustomer参照）。
+async function deletePostingLogsForCustomer(customerId) {
+  const logs = await listAllPostingLogsForCustomer(customerId);
+  for (const log of logs) {
+    await deletePostingLog(log.id);
+  }
+  return logs.length;
+}
+
+// 継続投稿の定義（post_schedules）と、それに紐づく投稿文章（schedule_texts。
+// schedule_id経由でのみ辿れるためpost_schedulesを起点に列挙する）を削除する。
+// 以前はpost_schedules自体を削除・一時停止していなかったが、これは同一customerIdでの
+// 再サインアップ（reactivateCustomer）を考慮しておらず、再登録して本契約が完了した瞬間に
+// isCanceled/requiresPaymentRegistrationガードが外れ、解約前の古いスケジュール定義が
+// そのまま生成・投稿を再開してしまう実害のある不具合になっていた（2026-09-02発覚、
+// biza3cp70で実機確認。解約前のスケジュールが再登録後に実際に投稿まで進んでいた）。
+// 同じ理由で1件ずつ順番に削除する。
 async function deleteSchedulesForCustomer(customerId) {
   const schedules = await listSchedulesForCustomer(customerId);
+  let deletedTextCount = 0;
   for (const schedule of schedules) {
+    const texts = await listScheduleTexts(schedule.id);
+    for (const text of texts) {
+      await deleteScheduleText(text.id);
+      deletedTextCount += 1;
+    }
     await deleteSchedule(schedule.id);
   }
-  return schedules.length;
+  return { scheduleCount: schedules.length, textCount: deletedTextCount };
 }
 
 router.post("/api/account/cancel", requireAuth, async (req, res) => {
@@ -154,11 +177,17 @@ router.post("/api/account/cancel", requireAuth, async (req, res) => {
       }
     }
 
-    const canceledScheduledPostCount = await cancelScheduledJobsForCustomer(customer.id);
-    console.info(`[account/cancel] canceled pending scheduled posts customerId=${customer.id} count=${canceledScheduledPostCount}`);
+    const deletedScheduledPostCount = await deleteAllScheduledPostsForCustomer(customer.id);
+    console.info(`[account/cancel] deleted scheduled posts customerId=${customer.id} count=${deletedScheduledPostCount}`);
 
-    const deletedScheduleCount = await deleteSchedulesForCustomer(customer.id);
-    console.info(`[account/cancel] deleted post_schedules customerId=${customer.id} count=${deletedScheduleCount}`);
+    const deletedPostingLogCount = await deletePostingLogsForCustomer(customer.id);
+    console.info(`[account/cancel] deleted posting logs customerId=${customer.id} count=${deletedPostingLogCount}`);
+
+    const { scheduleCount: deletedScheduleCount, textCount: deletedScheduleTextCount } =
+      await deleteSchedulesForCustomer(customer.id);
+    console.info(
+      `[account/cancel] deleted post_schedules customerId=${customer.id} scheduleCount=${deletedScheduleCount} textCount=${deletedScheduleTextCount}`
+    );
 
     // clearSessionCookieはブラウザにCookie削除を指示するだけでJWT自体は失効させないため、
     // resetPassword/changePasswordと同様にusers[].sessionVersionを全員分インクリメントし、

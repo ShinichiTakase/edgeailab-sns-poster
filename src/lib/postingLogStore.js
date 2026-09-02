@@ -149,6 +149,14 @@ async function listAllPostingLogsForCustomer(customerCode) {
   return all;
 }
 
+async function deletePostingLog(id) {
+  const res = await microcmsFetch(`/posting_logs/${encodeURIComponent(id)}`, { method: "DELETE" });
+  if (!res.ok && res.status !== 404) {
+    const text = await res.text().catch(() => "");
+    throw new Error(`[postingLogStore] deletePostingLog failed ${res.status} ${text.slice(0, 300)}`);
+  }
+}
+
 /** プラットフォームごとの投稿件数を集計する（該当なしは0） */
 async function getPostStatsForCustomer(customerCode, year, month) {
   const billingPeriod = toBillingPeriod(year, month);
@@ -168,6 +176,7 @@ module.exports = {
   listPostingLogsForCustomer,
   listPostingLogsForCustomerInRange,
   listAllPostingLogsForCustomer,
+  deletePostingLog,
   getPostStatsForCustomer,
   getActualPostCounts,
 };
