@@ -99,15 +99,33 @@ router.post("/api/account/cancel", requireAuth, async (req, res) => {
           // invoice_now: trueは最終請求書を"draft"状態で作るだけで、自動では
           // finalize（draft→open）も決済も行わない（Stripeはauto_advance:trueの
           // draft請求書を既定で作成の約1時間後に自動finalizeするが、それでは解約と
-          // 同時に課金されない）。finalizeInvoiceで即座にopenへ進め、続けてpayで
-          // その場で決済を試みる（2026-09-02発覚、実際に作成されたdraft請求書が
-          // 未決済のまま残っていたことをStripe側で確認。カードdetachより前に
-          // 実行するため、この時点ではまだカードが有効）。
+          // 同時に課金されない）。finalizeInvoiceで即座にopenへ進める（2026-09-02発覚、
+          // 実際に作成されたdraft請求書が未決済のまま残っていたことをStripe側で確認。
+          // カードdetachより前に実行するため、この時点ではまだカードが有効）。
+          //
+          // finalizeInvoice自体がcollection_method:charge_automaticallyの請求書に対して
+          // 即座に自動決済を試みるため、有効な支払い方法があればこの時点で既にstatus:"paid"
+          // かつamount_paid===totalになっている（その場合、後続のinvoices.payを呼ぶと
+          // "Invoice is already paid"エラーになるため呼ばない）。一方、支払い方法が
+          // 無い顧客（解約前にpayment.htmlで唯一のカードを削除していた等）の場合、
+          // Stripeは実際の課金を試みずamount_paid:0のままstatus:"paid"にしてしまうことが
+          // 実機で確認された（顧客残高への計上のみで、次回請求書が発生しない解約後は
+          // 実質的に回収不能になる）。amount_paid<totalを「実際には課金されていない」と
+          // 判定し、その場合のみinvoices.payで明示的な決済を試みる。それでも
+          // amount_paid<totalのままなら（支払い方法が無い等で決済不能）例外を投げて
+          // notifyFailureへ通知する。
           if (canceledSubscription.latest_invoice) {
             const invoiceId = canceledSubscription.latest_invoice;
             try {
-              await stripe.invoices.finalizeInvoice(invoiceId);
-              await stripe.invoices.pay(invoiceId);
+              let invoice = await stripe.invoices.finalizeInvoice(invoiceId);
+              if (invoice.amount_paid < invoice.total) {
+                invoice = await stripe.invoices.pay(invoiceId);
+              }
+              if (invoice.amount_paid < invoice.total) {
+                throw new Error(
+                  `invoice not fully collected: status=${invoice.status} amount_paid=${invoice.amount_paid} total=${invoice.total}`
+                );
+              }
             } catch (invoiceErr) {
               console.error(
                 `[account/cancel] final invoice finalize/pay failed customerId=${customer.id} invoiceId=${invoiceId}:`,
@@ -121,9 +139,10 @@ router.post("/api/account/cancel", requireAuth, async (req, res) => {
                   `invoiceId: ${invoiceId}`,
                   `エラー: ${invoiceErr.message}`,
                   "",
-                  "サブスクリプション自体は解約済みですが、解約時点までの従量料金を",
-                  "含む最終請求書の決済に失敗しました（カード拒否等）。Stripe管理画面で",
-                  "個別に請求書の状態を確認し、必要に応じて手動決済してください。",
+                  "サブスクリプション自体は解約済みですが、解約時点までの従量料金を含む",
+                  "最終請求書の決済が完了していません（カード拒否、または解約時点で",
+                  "有効な支払い方法が登録されていなかった等）。Stripe管理画面で個別に",
+                  "請求書の状態を確認し、必要に応じて顧客に連絡のうえ手動決済してください。",
                 ].join("\n")
               );
             }
