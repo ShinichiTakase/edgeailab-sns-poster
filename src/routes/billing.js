@@ -10,6 +10,7 @@ const { resolvePriorities, findPrimary, findBackup } = require("../lib/paymentMe
 const { BACKUP_CARD_CHARGED_EMAIL, PAYMENT_SUCCEEDED_EMAIL } = require("../lib/emailTemplates");
 const { sendCustomerMail } = require("../lib/customerMailer");
 const { notifyFailure } = require("../lib/mailer");
+const { activateAfterTrialLimitIfNeeded } = require("../lib/trialLimitAutoActivation");
 
 const router = express.Router();
 
@@ -321,6 +322,27 @@ router.post("/api/billing/payment-methods/confirm", requireAuth, express.json(),
       });
     }
 
+    // このカード登録の時点で既に「支払い必須」（トライアル対象外のstatus:"active"、
+    // または期限切れトライアル）だった場合、本契約（サブスクリプション作成）を
+    // その場で行う。activateAfterTrialLimitIfNeeded（trialLimitAutoActivation.js）は
+    // 名前こそ「トライアル投稿上限到達」時専用に見えるが、中身は「カード登録済み・
+    // サブスク未作成の顧客にサブスクリプションを即時作成する」だけの汎用処理のため
+    // そのまま流用する。呼ばないと、payment.htmlでカードを登録しただけでは
+    // requiresPaymentRegistration（stripeSubscriptionId基準）がtrueのままで、
+    // SNS連携・投稿等のブロックが解除されないまま「カードを登録したのに使えない」
+    // という状態になってしまう（2026-09-02、tester01@edgeailab.netで実機確認）。
+    // 通常のトライアル中（期限内）にカードだけ先に登録するケースは、
+    // requiresPaymentRegistrationがfalseなのでここには入らず即時課金されない
+    // （dashboard.htmlの「お支払い情報を登録してもトライアル期間は短縮されません」の通り）。
+    let activated = false;
+    if (customerStore.requiresPaymentRegistration(req.customer)) {
+      const result = await activateAfterTrialLimitIfNeeded({
+        customer: req.customer,
+        logger: { logError: (...args) => console.error(...args) },
+      });
+      activated = result === "activated";
+    }
+
     res.json({
       id: pm.id,
       brand: pm.card.brand,
@@ -328,6 +350,7 @@ router.post("/api/billing/payment-methods/confirm", requireAuth, express.json(),
       expMonth: pm.card.exp_month,
       expYear: pm.card.exp_year,
       priority,
+      activated,
     });
   } catch (err) {
     console.error(`[billing/payment-methods/confirm] failed customerId=${req.customer.id}:`, err);
