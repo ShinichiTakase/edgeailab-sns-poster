@@ -203,21 +203,27 @@ router.post("/api/account/cancel", requireAuth, async (req, res) => {
       }
     }
 
-    // clearSessionCookieはブラウザにCookie削除を指示するだけでJWT自体は失効させないため、
-    // resetPassword/changePasswordと同様にusers[].sessionVersionを全員分インクリメントし、
-    // 発行済みの全セッション（本人・招待メンバー全員、他デバイス・他ブラウザ含む）を
-    // サーバー側でも無効化する。これが無いと、解約後も既存のセッショントークンを
-    // 使い回すことで認証済みAPIを叩き続けられてしまう。
-    const invalidatedUsers = (customer.users || []).map((u) => ({
-      ...u,
-      sessionVersion: (Number(u.sessionVersion) || 0) + 1,
-    }));
+    // 招待メンバー（編集者・承認者・閲覧者等）のusersエントリ自体を削除する
+    // （2026-09-02追加。それまでは残っていた）。requireAuth.jsはcustomer.usersから
+    // userIdでfindしてヒットしなければ401にするため、エントリを削除すること自体が
+    // 即座かつ確実なセッション無効化になる（sessionVersionのインクリメント以上に
+    // 強い無効化）。解約を実行した管理者本人のエントリのみ残し、sessionVersionを
+    // インクリメントする（clearSessionCookieはブラウザにCookie削除を指示するだけで
+    // JWT自体は失効させないため、この処理が無いと解約後も既存のセッショントークンを
+    // 使い回すことで認証済みAPIを叩き続けられてしまう）。
+    const cancelingUser = (customer.users || []).find((u) => u.userId === req.user.userId);
+    const remainingUsers = cancelingUser
+      ? [{ ...cancelingUser, sessionVersion: (Number(cancelingUser.sessionVersion) || 0) + 1 }]
+      : [];
     // canceledAt: 24時間の再登録ロック（customerStore.isWithinCancellationLock、
     // auth.js参照）とカード削除の23:30遅延（isPastCardDeletionDelay、
     // scripts/canceledCardCleanup.js参照）の両方の起点。2026-09-02追加。
+    // 同一メールで再サインアップした場合、reactivateCustomerがusersを新しい管理者
+    // 1名のみで丸ごと上書きするため（既存実装）、招待メンバーが残っていた場合でも
+    // 再登録後は自動的にクリーンな状態になる。
     await customerStore.updateCustomer(customer.id, {
       status: ["canceled"],
-      users: invalidatedUsers,
+      users: remainingUsers,
       canceledAt: new Date().toISOString(),
     });
 
