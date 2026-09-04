@@ -3,13 +3,19 @@
 // DateのgetFullYear/getMonthをそのまま使う）。顧客ごとのStripe請求サイクル
 // （billingCycle.jsのgetCurrentBillingCycle）とは異なる区切りである点に注意。
 //
-// 「前月」分は、月が変わった後は絶対に値が変わらない確定データのため、月初に
-// src/scripts/adminStatsMonthlyBatch.js（cron）がjson/admin_stats_last_month.jsonへ
-// 事前計算してキャッシュし、getAdminStatsはそれを読むだけにする（全顧客横断の
-// 都度計算は顧客数・投稿数が増えると重くなるため。2026-09-05、ユーザー要望で
-// キャッシュ化）。キャッシュが無い・月がズレている（バッチ未実行/失敗）場合のみ、
-// 安全側フォールバックとしてその場で計算する。
-// 「今月（今日まで）」は常に生きた値のため、キャッシュ対象外で毎回計算する。
+// 表示データはすべて事前計算済みのJSONキャッシュから読む（2026-09-05、ユーザー要望で
+// 「今月分もリアルタイム表示は不要」となり、リクエスト時の都度計算を全廃した）。
+// getAdminStatsはHTTPリクエストの都度、全顧客横断の計算（Stripe API呼び出し含む）を
+// 一切行わない。実際の計算は2本のバッチスクリプトが担う:
+//   - src/scripts/adminStatsMonthlyBatch.js（月初1回）→ json/admin_stats_last_month.json
+//     前月分は月が変わった後は絶対に値が変わらない確定データなので月1回で十分。
+//   - src/scripts/adminStatsDailyBatch.js（毎日4時、トラフィックの少ない時間帯）
+//     → json/admin_stats_this_month.json
+//     今月分・現在の利用者数は生きた値だが、リアルタイム表示は不要という前提のため、
+//     日次バッチの計算結果（＝最大1日遅れ）で足りる。
+// キャッシュが無い・対象月がズレている（バッチ未実行/失敗）場合のみ、安全側
+// フォールバックとしてgetAdminStats内でその場計算する（表示を壊さないための保険。
+// 通常運用では発生しない想定）。
 const fs = require("fs");
 const path = require("path");
 const { listAllCustomers, isCanceled } = require("./customerStore");
@@ -18,7 +24,9 @@ const { pricesForPlan, planKey } = require("./stripePricing");
 const { computePriceAmount } = require("./stripeTierPricing");
 
 const PLATFORMS = ["x", "threads", "facebook", "instagram", "linkedin"];
-const CACHE_PATH = path.join(__dirname, "..", "..", "json", "admin_stats_last_month.json");
+const CACHE_DIR = path.join(__dirname, "..", "..", "json");
+const LAST_MONTH_CACHE_PATH = path.join(CACHE_DIR, "admin_stats_last_month.json");
+const THIS_MONTH_CACHE_PATH = path.join(CACHE_DIR, "admin_stats_this_month.json");
 
 function emptyPlatformCounts() {
   return { x: 0, threads: 0, facebook: 0, instagram: 0, linkedin: 0 };
@@ -35,26 +43,23 @@ function monthKey(date) {
   return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}`;
 }
 
-function readLastMonthCache() {
-  if (!fs.existsSync(CACHE_PATH)) return null;
+function readCache(cachePath) {
+  if (!fs.existsSync(cachePath)) return null;
   try {
-    const raw = fs.readFileSync(CACHE_PATH, "utf-8");
+    const raw = fs.readFileSync(cachePath, "utf-8");
     if (!raw.trim()) return null;
     return JSON.parse(raw);
   } catch (err) {
-    console.error("[adminStats] failed to read cache, falling back to live calculation:", err);
+    console.error(`[adminStats] failed to read cache ${cachePath}, falling back to live calculation:`, err);
     return null;
   }
 }
 
-function writeLastMonthCache(data) {
-  fs.writeFileSync(CACHE_PATH, JSON.stringify(data, null, 2) + "\n", "utf-8");
+function writeCache(cachePath, data) {
+  fs.writeFileSync(cachePath, JSON.stringify(data, null, 2) + "\n", "utf-8");
 }
 
-// 前月中にcanceledAtが記録された顧客数。「前月の利用者数」自体（＝現在の利用者数から
-// これを差し引いたもの）は「現在」が生きた値であるため、この値だけをキャッシュ対象に
-// する（current自体はキャッシュしない。呼び出し側で都度 current - canceledLastMonth
-// を計算すること）。
+// 前月中にcanceledAtが記録された顧客数。
 function countCanceledInMonth(customers, start, end) {
   return customers.filter((c) => {
     if (!c.canceledAt) return false;
@@ -142,8 +147,8 @@ async function computePeriodStats(customers, stripe, start, end) {
   };
 }
 
-// 「前月」分のスナップショットを実際に計算する（キャッシュの中身そのもの）。
-// バッチスクリプト（月初実行）と、キャッシュ未生成/月ズレ時のフォールバックの両方から呼ぶ。
+// 「前月」分のスナップショット。月初バッチ（adminStatsMonthlyBatch.js）と、
+// キャッシュ未生成/月ズレ時のフォールバックの両方から呼ぶ。
 async function buildLastMonthSnapshot(customers, stripe, now) {
   const { start, end } = monthRange(now, -1);
   const periodStats = await computePeriodStats(customers, stripe, start, end);
@@ -156,51 +161,83 @@ async function buildLastMonthSnapshot(customers, stripe, now) {
   };
 }
 
-// adminStatsMonthlyBatch.js（cron、月初起動）専用のエントリポイント。
-// 顧客一覧の取得から行い、計算結果をそのままキャッシュファイルへ書き込む。
-async function computeAndCacheLastMonthStats(stripe, now = new Date()) {
-  const customers = await listAllCustomers();
-  const snapshot = await buildLastMonthSnapshot(customers, stripe, now);
-  writeLastMonthCache(snapshot);
-  return snapshot;
-}
-
-async function getAdminStats(stripe) {
-  const now = new Date();
-  const customers = await listAllCustomers();
-  const expectedLastMonthKey = monthKey(monthRange(now, -1).start);
-
-  let lastMonthSnapshot = readLastMonthCache();
-  if (!lastMonthSnapshot || lastMonthSnapshot.month !== expectedLastMonthKey) {
-    if (lastMonthSnapshot) {
-      console.warn(
-        `[adminStats] cached last-month stats are stale (cached=${lastMonthSnapshot.month}, expected=${expectedLastMonthKey}); falling back to live calculation. Check that adminStatsMonthlyBatch.js's cron is running.`
-      );
-    } else {
-      console.warn("[adminStats] no cached last-month stats found; falling back to live calculation. Run adminStatsMonthlyBatch.js once, or set up its cron.");
-    }
-    lastMonthSnapshot = await buildLastMonthSnapshot(customers, stripe, now);
-  }
-
-  const thisMonth = monthRange(now, 0);
-  // 今月は月末まで待たず「今日まで」の実績のみを対象にする。生きた値のためキャッシュしない。
-  const thisMonthStats = await computePeriodStats(customers, stripe, thisMonth.start, now);
-
-  const currentUsers = customers.filter((c) => !isCanceled(c)).length;
-
+// 「今月（生成時点まで）」分のスナップショット。現在の利用者数もここに含める
+// （どちらも「生きた値だが日次更新で足りる」という同じ性質のため）。日次バッチ
+// （adminStatsDailyBatch.js）と、キャッシュ未生成/月ズレ時のフォールバックの
+// 両方から呼ぶ。
+async function buildThisMonthSnapshot(customers, stripe, now) {
+  const { start } = monthRange(now, 0);
+  const periodStats = await computePeriodStats(customers, stripe, start, now);
   return {
-    users: {
-      current: currentUsers,
-      canceledLastMonth: lastMonthSnapshot.canceledLastMonth,
-      lastMonth: currentUsers - lastMonthSnapshot.canceledLastMonth,
-    },
-    posts: { lastMonth: lastMonthSnapshot.posts, thisMonth: thisMonthStats.posts },
-    revenue: {
-      lastMonth: { counts: lastMonthSnapshot.revenue.counts, total: lastMonthSnapshot.revenue.total },
-      thisMonth: { counts: thisMonthStats.revenue.counts, total: thisMonthStats.revenue.total },
-      xSurcharge: { lastMonth: lastMonthSnapshot.revenue.xSurcharge, thisMonth: thisMonthStats.revenue.xSurcharge },
-    },
+    month: monthKey(start),
+    generatedAt: new Date().toISOString(),
+    current: customers.filter((c) => !isCanceled(c)).length,
+    posts: periodStats.posts,
+    revenue: periodStats.revenue,
   };
 }
 
-module.exports = { getAdminStats, computeAndCacheLastMonthStats };
+// adminStatsMonthlyBatch.js（cron、月初起動）専用のエントリポイント。
+async function computeAndCacheLastMonthStats(stripe, now = new Date()) {
+  const customers = await listAllCustomers();
+  const snapshot = await buildLastMonthSnapshot(customers, stripe, now);
+  writeCache(LAST_MONTH_CACHE_PATH, snapshot);
+  return snapshot;
+}
+
+// adminStatsDailyBatch.js（cron、毎日4時起動）専用のエントリポイント。
+async function computeAndCacheThisMonthStats(stripe, now = new Date()) {
+  const customers = await listAllCustomers();
+  const snapshot = await buildThisMonthSnapshot(customers, stripe, now);
+  writeCache(THIS_MONTH_CACHE_PATH, snapshot);
+  return snapshot;
+}
+
+// 両キャッシュを読み、対象月が現在と一致していることだけ確認する。ズレていれば
+// （バッチ未実行・失敗）その場でライブ計算する安全側フォールバック。通常運用では
+// 発生せず、発生した場合は運用上の異常（cron停止等）を示すためconsole.warnする。
+async function getAdminStats(stripe) {
+  const now = new Date();
+  const expectedThisMonthKey = monthKey(monthRange(now, 0).start);
+  const expectedLastMonthKey = monthKey(monthRange(now, -1).start);
+
+  let lastMonthSnapshot = readCache(LAST_MONTH_CACHE_PATH);
+  let thisMonthSnapshot = readCache(THIS_MONTH_CACHE_PATH);
+
+  // フォールバックが必要な場合のみ顧客一覧を取得する（通常運用では一切呼ばれない）。
+  let customersPromise = null;
+  function customersOnce() {
+    if (!customersPromise) customersPromise = listAllCustomers();
+    return customersPromise;
+  }
+
+  if (!lastMonthSnapshot || lastMonthSnapshot.month !== expectedLastMonthKey) {
+    console.warn(
+      `[adminStats] cached last-month stats ${lastMonthSnapshot ? `are stale (cached=${lastMonthSnapshot.month}, expected=${expectedLastMonthKey})` : "not found"}; falling back to live calculation. Check that adminStatsMonthlyBatch.js's cron is running.`
+    );
+    lastMonthSnapshot = await buildLastMonthSnapshot(await customersOnce(), stripe, now);
+  }
+  if (!thisMonthSnapshot || thisMonthSnapshot.month !== expectedThisMonthKey) {
+    console.warn(
+      `[adminStats] cached this-month stats ${thisMonthSnapshot ? `are stale (cached=${thisMonthSnapshot.month}, expected=${expectedThisMonthKey})` : "not found"}; falling back to live calculation. Check that adminStatsDailyBatch.js's cron is running.`
+    );
+    thisMonthSnapshot = await buildThisMonthSnapshot(await customersOnce(), stripe, now);
+  }
+
+  return {
+    users: {
+      current: thisMonthSnapshot.current,
+      canceledLastMonth: lastMonthSnapshot.canceledLastMonth,
+      lastMonth: thisMonthSnapshot.current - lastMonthSnapshot.canceledLastMonth,
+    },
+    posts: { lastMonth: lastMonthSnapshot.posts, thisMonth: thisMonthSnapshot.posts },
+    revenue: {
+      lastMonth: { counts: lastMonthSnapshot.revenue.counts, total: lastMonthSnapshot.revenue.total },
+      thisMonth: { counts: thisMonthSnapshot.revenue.counts, total: thisMonthSnapshot.revenue.total },
+      xSurcharge: { lastMonth: lastMonthSnapshot.revenue.xSurcharge, thisMonth: thisMonthSnapshot.revenue.xSurcharge },
+    },
+    generatedAt: { lastMonth: lastMonthSnapshot.generatedAt, thisMonth: thisMonthSnapshot.generatedAt },
+  };
+}
+
+module.exports = { getAdminStats, computeAndCacheLastMonthStats, computeAndCacheThisMonthStats };
