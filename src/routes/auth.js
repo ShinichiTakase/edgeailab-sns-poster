@@ -10,6 +10,7 @@ const { loadStore } = require("../lib/tokenStore");
 const { getStripe } = require("../lib/stripeClient");
 const { planKey } = require("../lib/stripePricing");
 const { isKnownTestSlug } = require("../lib/snsConnectionModeConfig");
+const { hasUnread: hasUnreadAnnouncements } = require("../lib/announcementStore");
 
 const router = express.Router();
 
@@ -532,6 +533,7 @@ router.get("/api/auth/me", requireAuth, async (req, res) => {
     ...safeCustomer(req.customer),
     nextBillingDate,
     connectedPlatforms: connected,
+    hasUnreadAnnouncements: hasUnreadAnnouncements(req.customer.id, req.user.userId),
     user: {
       email: req.user.email,
       // 招待メンバーは招待時に入力した氏名（users[].name）を持つが、

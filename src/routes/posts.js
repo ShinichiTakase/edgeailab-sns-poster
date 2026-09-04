@@ -32,6 +32,7 @@ const { sendTrialPostLimitWarningIfNeeded } = require("../lib/trialPostLimitWarn
 const { sendOneShotPostResultEmail } = require("../lib/oneShotPostResultMailer");
 const { activateAfterTrialLimitIfNeeded, sendTrialPostLimitReachedEmailIfNeeded } = require("../lib/trialLimitAutoActivation");
 const { containsUrl, extractFirstUrl } = require("../lib/urlDetection");
+const { announcePostFailure } = require("../lib/postFailureAnnouncer");
 const xPoster = require("../lib/xPoster");
 const facebookPoster = require("../lib/facebookPoster");
 const instagramPoster = require("../lib/instagramPoster");
@@ -207,6 +208,11 @@ router.post(
         // 専用のエラーコードにする（instagramPoster.jsのwaitForContainerReady参照）。
         const isInstagramTimeout = err.message && err.message.startsWith("instagram_processing_timeout");
         results[platform] = { ok: false, error: isInstagramTimeout ? "instagram_processing_timeout" : "post_failed" };
+        try {
+          announcePostFailure({ customer: req.customer, platform, content: text, err, scheduleName: null });
+        } catch (annErr) {
+          console.error(`[posts] announcement create failed customerId=${customerId} platform=${platform}:`, annErr);
+        }
         continue;
       }
 

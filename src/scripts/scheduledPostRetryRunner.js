@@ -20,6 +20,7 @@ const retryStore = require("../lib/scheduledPostRetryStore");
 const scheduleStore = require("../lib/scheduleStore");
 const { sendScheduleResultEmail } = require("../lib/scheduleResultMailer");
 const { sendOneShotPostResultEmail } = require("../lib/oneShotPostResultMailer");
+const { announcePostFailure } = require("../lib/postFailureAnnouncer");
 const { logInfo, logWarn, logError } = require("../lib/logger").createLogger("scheduled-post-retry-runner.log");
 
 async function main() {
@@ -51,15 +52,23 @@ async function main() {
         `[scheduled-post-retry-runner] retry failed id=${post.id} platform=${platform} customerCode=${post.customer_code} (attempt ${entry.retryCount}/${retryStore.MAX_RETRIES}${exhausted ? ", giving up" : ""}):`,
         err
       );
-      // 打ち止め（再試行上限到達）になった時点が「最終結果」。この1回だけ通知メールを送る
-      // （スケジュール投稿・ワンショット投稿でテンプレート・宛先解決が異なるため分岐する）。
+      // 打ち止め（再試行上限到達）になった時点が「最終結果」。この1回だけ通知メールを送り
+      // （スケジュール投稿・ワンショット投稿でテンプレート・宛先解決が異なるため分岐する）、
+      // ダッシュボードの「お知らせ」にも記録する（メール送信の成否とは独立に記録する。
+      // notify_email:falseでメールを送らない場合も、お知らせ自体は表示する）。
       if (exhausted) {
-        try {
-          const customer = customerCache.get(post.customer_code);
-          if (customer && post.source_schedule_id) {
+        const customer = customerCache.get(post.customer_code);
+        let scheduleName = null;
+        if (customer && post.source_schedule_id) {
+          try {
             const schedule = await scheduleStore.getScheduleById(post.source_schedule_id);
+            scheduleName = schedule && schedule.name;
             await sendScheduleResultEmail({ schedule, customer, post, platform, success: false, logger: { logError } });
-          } else if (customer && post.notify_email !== false) {
+          } catch (mailErr) {
+            logError(`[scheduled-post-retry-runner] result email failed id=${post.id}:`, mailErr);
+          }
+        } else if (customer && post.notify_email !== false) {
+          try {
             await sendOneShotPostResultEmail({
               customer,
               recipientUserId: post.created_by,
@@ -68,9 +77,16 @@ async function main() {
               success: false,
               logger: { logError },
             });
+          } catch (mailErr) {
+            logError(`[scheduled-post-retry-runner] result email failed id=${post.id}:`, mailErr);
           }
-        } catch (mailErr) {
-          logError(`[scheduled-post-retry-runner] result email failed id=${post.id}:`, mailErr);
+        }
+        if (customer) {
+          try {
+            announcePostFailure({ customer, platform, content: post.content, err, scheduleName });
+          } catch (annErr) {
+            logError(`[scheduled-post-retry-runner] announcement create failed id=${post.id}:`, annErr);
+          }
         }
       }
     }
