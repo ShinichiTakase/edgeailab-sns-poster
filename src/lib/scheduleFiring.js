@@ -73,11 +73,64 @@ function effectiveDailyCount(schedule, textCount) {
   return Math.max(0, Math.min(Number(schedule.daily_post_count) || 0, configuredSlots.length, textCount));
 }
 
-/** 指定日（そのローカル日付の00:00起点）・指定枠の中から一様乱数でDateを1つ選ぶ。 */
-function pickRandomTimeInSlot(dateOnlyValue, slot) {
+/** ラウンドロビン消化順を「生成元（URL/原文）ごとに横断→次の生成順」に並び替える
+ * （2026-09-02追加）。1回の一括生成（POST /texts/bulk）は1つの生成元URL/原文につき
+ * 複数文書（DOCS_NUMBER件）をまとめて保存し、全件に同一のsource_excerptを共通して
+ * 記録する（createScheduleText参照）。従来はscheduleTextStore.listApprovedScheduleTexts
+ * が返す配列（createdAt昇順）をそのままラウンドロビンに使っていたため、一括生成の
+ * 保存順（生成元URL単位でまとまって作成される）がそのまま消化順になり、「同じ生成元の
+ * 文書を複数日連続で使い切ってから次の生成元に移る」形になっていた。これはラウンド
+ * ロビンとして生成元の分散が働いておらず不自然という指摘を受け、生成元ごとに
+ * グルーピングした上で「各生成元の1番目の文書→各生成元の2番目の文書→…」の順に
+ * 転置する。生成元の識別はsource_excerpt文字列の完全一致（同一の一括生成呼び出しは
+ * 全エントリに同じ文字列を記録するため）。source_excerptが無い旧データ・単発作成分は
+ * 自分1件だけのグループとして扱う（他とまとまらず独立して順番が回ってくる）。
+ * 生成元ごとの文書数が異なる場合、文書が尽きた生成元はその周回だけスキップする。 */
+function orderTextsForRoundRobin(texts) {
+  const groups = [];
+  const groupIndexByKey = new Map();
+  for (const text of texts) {
+    const key = text.source_excerpt || `__no_source__:${text.id}`;
+    if (!groupIndexByKey.has(key)) {
+      groupIndexByKey.set(key, groups.length);
+      groups.push([]);
+    }
+    groups[groupIndexByKey.get(key)].push(text);
+  }
+  const maxGroupLength = groups.reduce((max, g) => Math.max(max, g.length), 0);
+  const ordered = [];
+  for (let position = 0; position < maxGroupLength; position++) {
+    for (const group of groups) {
+      if (group[position]) ordered.push(group[position]);
+    }
+  }
+  return ordered;
+}
+
+/** 指定日・指定枠が、指定時刻の時点で既に終了しているか（枠のend時刻を過ぎているか）。
+ * 当日新規作成されたスケジュールが、既に終わった枠の分までまとめて即時投稿されてしまう
+ * 不具合（2026-09-02発覚）を防ぐため、materializerはこの判定でtrueの枠をスキップする。 */
+function isSlotElapsed(dateOnlyValue, slot, now) {
+  const endMin = timeStringToMinutes(slot.end);
+  const slotEnd = new Date(dateOnlyValue.getTime() + endMin * 60 * 1000);
+  return slotEnd <= now;
+}
+
+/** 指定日（そのローカル日付の00:00起点）・指定枠の中から一様乱数でDateを1つ選ぶ。
+ * `now`を渡すと、枠の開始時刻が既に過ぎている（＝枠の途中でスケジュールが新規作成された）
+ * 場合に、選択範囲の下限を`now`まで繰り上げる。これにより「枠は始まっているが終わっては
+ * いない」ケースでも、必ず現在時刻より後（＝枠の残り時間内）の時刻が選ばれ、過去時刻に
+ * なって即時投稿されてしまうことがない。呼び出し側は事前に`isSlotElapsed`で完全に終了した
+ * 枠を除外しておくこと（そうでないと選択範囲が空になり得る）。 */
+function pickRandomTimeInSlot(dateOnlyValue, slot, now) {
   const startMin = timeStringToMinutes(slot.start);
   const endMin = timeStringToMinutes(slot.end);
-  const offsetMin = startMin + Math.floor(Math.random() * (endMin - startMin));
+  let effectiveStartMin = startMin;
+  if (now) {
+    const nowMin = Math.floor((now.getTime() - dateOnlyValue.getTime()) / (60 * 1000));
+    if (nowMin > effectiveStartMin) effectiveStartMin = Math.min(nowMin, endMin - 1);
+  }
+  const offsetMin = effectiveStartMin + Math.floor(Math.random() * (endMin - effectiveStartMin));
   return new Date(dateOnlyValue.getTime() + offsetMin * 60 * 1000);
 }
 
@@ -89,6 +142,8 @@ module.exports = {
   getConfiguredSlots,
   isSlotWideEnough,
   effectiveDailyCount,
+  orderTextsForRoundRobin,
+  isSlotElapsed,
   pickRandomTimeInSlot,
   dateOnly,
 };

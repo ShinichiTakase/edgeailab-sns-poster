@@ -11,6 +11,15 @@
 // 冪等性: last_materialized_dt（YYYY-MM-DD）が当日と一致するスケジュールはスキップする。
 // 1日の実消化数は effectiveDailyCount()（設定回数・設定枠数・登録済み投稿文章数の最小値）
 // で自動的にクランプされ、同日内で同じ文章が2回使われることはない。
+//
+// 既に終了時刻を過ぎた枠のスキップ（2026-09-02追加）: 曜日・投稿期間に一致してさえいれば
+// 当日の枠は無条件で全て生成していたため、日中に新規作成／編集したスケジュールで
+// 「既に終わった枠」まで含めて過去時刻のscheduled_atが生成され、直後のrunner tickで
+// 複数枠分がまとめて一斉投稿されてしまう不具合が実機で発覚した。isSlotElapsed()で
+// 終了時刻を過ぎた枠は生成自体をスキップする（その枠は今日は投稿されない。翌日以降の
+// 同じ枠で改めて生成される）。まだ終了していない枠（開始時刻は過ぎているが終了前）は
+// pickRandomTimeInSlot()に現在時刻を渡し、選択範囲の下限を現在時刻まで繰り上げることで
+// 必ず枠の残り時間内かつ未来の時刻が選ばれるようにする。
 const path = require("path");
 require("dotenv").config({ path: path.join(__dirname, "..", "..", ".env") });
 
@@ -26,6 +35,8 @@ const {
   isDateInScheduleRange,
   getConfiguredSlots,
   effectiveDailyCount,
+  orderTextsForRoundRobin,
+  isSlotElapsed,
   pickRandomTimeInSlot,
   dateOnly,
 } = require("../lib/scheduleFiring");
@@ -89,7 +100,10 @@ async function main() {
 
       // 承認待ち・却下・失効中のバッチ（編集者作成分）は自動生成プールから除外する
       // （scheduleTextStore.listApprovedScheduleTexts参照）。
-      const texts = await scheduleTextStore.listApprovedScheduleTexts(schedule.id);
+      // 消化順は生成元（URL/原文）ごとに横断するよう並び替える（orderTextsForRoundRobin
+      // 参照）。一括生成の保存順（生成元単位でまとまる）をそのまま使うと、同じ生成元の
+      // 文書を連続して使い切ってから次の生成元に移ってしまうため。
+      const texts = orderTextsForRoundRobin(await scheduleTextStore.listApprovedScheduleTexts(schedule.id));
       const n = effectiveDailyCount(schedule, texts.length);
       if (n === 0) {
         // 投稿文章が未登録、または枠が未設定。生成する予約がないだけで、
@@ -109,8 +123,21 @@ async function main() {
       let roundRobinIndex = Number(schedule.round_robin_index) || 0;
 
       for (let i = 0; i < n; i++) {
+        const slot = slots[i];
+        if (isSlotElapsed(today, slot, now)) {
+          // 当日の途中でスケジュールが新規作成／編集された等の理由で、この枠は既に
+          // 終了時刻を過ぎている。過去時刻でscheduled_postを作ると即座に実行対象
+          // （due）になり、複数枠分がまとめて一気に投稿されてしまう不具合が実機で
+          // 発覚した（2026-09-02）。この枠は今日は投稿せずスキップする（ラウンド
+          // ロビンの消化もしない＝この枠に割り当てられるはずだった文章は次の機会に回る）。
+          logInfo(
+            `[schedule-materializer] scheduleId=${schedule.id} slot${i + 1}(${slot.start}-${slot.end}) already elapsed, skipping`
+          );
+          continue;
+        }
+
         const text = texts[roundRobinIndex % texts.length];
-        const scheduledAt = pickRandomTimeInSlot(today, slots[i]);
+        const scheduledAt = pickRandomTimeInSlot(today, slot, now);
 
         for (const platform of platforms) {
           if (!connectedEntry[platform]) continue; // 連携解除済みのプラットフォームは生成しない
