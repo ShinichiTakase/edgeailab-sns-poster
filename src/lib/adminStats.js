@@ -2,15 +2,23 @@
 // 対象は暦月（カレンダー月、Asia/Tokyo基準。コンテナのTZ=Asia/Tokyo前提で
 // DateのgetFullYear/getMonthをそのまま使う）。顧客ごとのStripe請求サイクル
 // （billingCycle.jsのgetCurrentBillingCycle）とは異なる区切りである点に注意。
-// 全顧客を横断するため、顧客数・投稿数が増えると計算量が増える（都度計算、
-// キャッシュ無し。将来重くなるようであれば、他のcronジョブと同じくバッチ集計
-// してJSONにキャッシュする方式への切り替えを検討すること）。
+//
+// 「前月」分は、月が変わった後は絶対に値が変わらない確定データのため、月初に
+// src/scripts/adminStatsMonthlyBatch.js（cron）がjson/admin_stats_last_month.jsonへ
+// 事前計算してキャッシュし、getAdminStatsはそれを読むだけにする（全顧客横断の
+// 都度計算は顧客数・投稿数が増えると重くなるため。2026-09-05、ユーザー要望で
+// キャッシュ化）。キャッシュが無い・月がズレている（バッチ未実行/失敗）場合のみ、
+// 安全側フォールバックとしてその場で計算する。
+// 「今月（今日まで）」は常に生きた値のため、キャッシュ対象外で毎回計算する。
+const fs = require("fs");
+const path = require("path");
 const { listAllCustomers, isCanceled } = require("./customerStore");
 const { getActualPostCounts } = require("./postingLogStore");
 const { pricesForPlan, planKey } = require("./stripePricing");
 const { computePriceAmount } = require("./stripeTierPricing");
 
 const PLATFORMS = ["x", "threads", "facebook", "instagram", "linkedin"];
+const CACHE_PATH = path.join(__dirname, "..", "..", "json", "admin_stats_last_month.json");
 
 function emptyPlatformCounts() {
   return { x: 0, threads: 0, facebook: 0, instagram: 0, linkedin: 0 };
@@ -23,18 +31,36 @@ function monthRange(now, monthOffset) {
   return { start, end };
 }
 
-// 現在の利用者数＝解約済みでない顧客数。前月の利用者数＝現在の利用者数から
-// 前月中にcanceledAtが記録された顧客数を差し引いたもの（要件どおりの単純な差分。
-// 新規契約分の増加は考慮しない近似値）。
-function getUserCounts(customers, now) {
-  const current = customers.filter((c) => !isCanceled(c)).length;
-  const { start, end } = monthRange(now, -1);
-  const canceledLastMonth = customers.filter((c) => {
+function monthKey(date) {
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}`;
+}
+
+function readLastMonthCache() {
+  if (!fs.existsSync(CACHE_PATH)) return null;
+  try {
+    const raw = fs.readFileSync(CACHE_PATH, "utf-8");
+    if (!raw.trim()) return null;
+    return JSON.parse(raw);
+  } catch (err) {
+    console.error("[adminStats] failed to read cache, falling back to live calculation:", err);
+    return null;
+  }
+}
+
+function writeLastMonthCache(data) {
+  fs.writeFileSync(CACHE_PATH, JSON.stringify(data, null, 2) + "\n", "utf-8");
+}
+
+// 前月中にcanceledAtが記録された顧客数。「前月の利用者数」自体（＝現在の利用者数から
+// これを差し引いたもの）は「現在」が生きた値であるため、この値だけをキャッシュ対象に
+// する（current自体はキャッシュしない。呼び出し側で都度 current - canceledLastMonth
+// を計算すること）。
+function countCanceledInMonth(customers, start, end) {
+  return customers.filter((c) => {
     if (!c.canceledAt) return false;
     const t = new Date(c.canceledAt).getTime();
     return t >= start.getTime() && t < end.getTime();
   }).length;
-  return { current, canceledLastMonth, lastMonth: current - canceledLastMonth };
 }
 
 /**
@@ -116,28 +142,65 @@ async function computePeriodStats(customers, stripe, start, end) {
   };
 }
 
+// 「前月」分のスナップショットを実際に計算する（キャッシュの中身そのもの）。
+// バッチスクリプト（月初実行）と、キャッシュ未生成/月ズレ時のフォールバックの両方から呼ぶ。
+async function buildLastMonthSnapshot(customers, stripe, now) {
+  const { start, end } = monthRange(now, -1);
+  const periodStats = await computePeriodStats(customers, stripe, start, end);
+  return {
+    month: monthKey(start),
+    generatedAt: new Date().toISOString(),
+    canceledLastMonth: countCanceledInMonth(customers, start, end),
+    posts: periodStats.posts,
+    revenue: periodStats.revenue,
+  };
+}
+
+// adminStatsMonthlyBatch.js（cron、月初起動）専用のエントリポイント。
+// 顧客一覧の取得から行い、計算結果をそのままキャッシュファイルへ書き込む。
+async function computeAndCacheLastMonthStats(stripe, now = new Date()) {
+  const customers = await listAllCustomers();
+  const snapshot = await buildLastMonthSnapshot(customers, stripe, now);
+  writeLastMonthCache(snapshot);
+  return snapshot;
+}
+
 async function getAdminStats(stripe) {
   const now = new Date();
   const customers = await listAllCustomers();
+  const expectedLastMonthKey = monthKey(monthRange(now, -1).start);
 
-  const lastMonth = monthRange(now, -1);
+  let lastMonthSnapshot = readLastMonthCache();
+  if (!lastMonthSnapshot || lastMonthSnapshot.month !== expectedLastMonthKey) {
+    if (lastMonthSnapshot) {
+      console.warn(
+        `[adminStats] cached last-month stats are stale (cached=${lastMonthSnapshot.month}, expected=${expectedLastMonthKey}); falling back to live calculation. Check that adminStatsMonthlyBatch.js's cron is running.`
+      );
+    } else {
+      console.warn("[adminStats] no cached last-month stats found; falling back to live calculation. Run adminStatsMonthlyBatch.js once, or set up its cron.");
+    }
+    lastMonthSnapshot = await buildLastMonthSnapshot(customers, stripe, now);
+  }
+
   const thisMonth = monthRange(now, 0);
+  // 今月は月末まで待たず「今日まで」の実績のみを対象にする。生きた値のためキャッシュしない。
+  const thisMonthStats = await computePeriodStats(customers, stripe, thisMonth.start, now);
 
-  const [lastMonthStats, thisMonthStats] = await Promise.all([
-    computePeriodStats(customers, stripe, lastMonth.start, lastMonth.end),
-    // 今月は月末まで待たず「今日まで」の実績のみを対象にする。
-    computePeriodStats(customers, stripe, thisMonth.start, now),
-  ]);
+  const currentUsers = customers.filter((c) => !isCanceled(c)).length;
 
   return {
-    users: getUserCounts(customers, now),
-    posts: { lastMonth: lastMonthStats.posts, thisMonth: thisMonthStats.posts },
+    users: {
+      current: currentUsers,
+      canceledLastMonth: lastMonthSnapshot.canceledLastMonth,
+      lastMonth: currentUsers - lastMonthSnapshot.canceledLastMonth,
+    },
+    posts: { lastMonth: lastMonthSnapshot.posts, thisMonth: thisMonthStats.posts },
     revenue: {
-      lastMonth: { counts: lastMonthStats.revenue.counts, total: lastMonthStats.revenue.total },
+      lastMonth: { counts: lastMonthSnapshot.revenue.counts, total: lastMonthSnapshot.revenue.total },
       thisMonth: { counts: thisMonthStats.revenue.counts, total: thisMonthStats.revenue.total },
-      xSurcharge: { lastMonth: lastMonthStats.revenue.xSurcharge, thisMonth: thisMonthStats.revenue.xSurcharge },
+      xSurcharge: { lastMonth: lastMonthSnapshot.revenue.xSurcharge, thisMonth: thisMonthStats.revenue.xSurcharge },
     },
   };
 }
 
-module.exports = { getAdminStats };
+module.exports = { getAdminStats, computeAndCacheLastMonthStats };
