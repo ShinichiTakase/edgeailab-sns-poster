@@ -158,14 +158,11 @@ crontab登録は`/etc/cron.d/edgeailab-net-orphan-sns-token-check`に日次（�
 45 * * * * cd /opt/project/deploy/xserver-vps && docker compose run --rm sns-poster-canceled-card-cleanup
 ```
 
-**要対応（2026-09-02時点で未対応）**: microCMSの`customers`スキーマに`canceledAt`
-フィールド（テキスト、ISO日時文字列。既存の`trialEndsAt`と同じ形式）が存在しない。
-`customerStore.js`の`updateCustomer`が持つ「未定義フィールドは除外して再試行する」
-フォールバック（2026-08-25の重複課金事故を受けて追加済み）により書き込みエラーには
-ならないが、`canceledAt`自体が一切保存されないため、**このフィールドを追加するまで
-24時間ロック・カード削除の遅延削除のどちらも実質的に無効**（＝カードが自動削除
-されなくなる、24時間ロックもかからない）。フィールド追加は
-[docs/内部仕様_解約.md](docs/内部仕様_解約.md)参照。
+**2026-09-05解消確認**: 上記`canceledAt`フィールドは、2026-09-02時点では
+microCMSの`customers`スキーマに存在せず「要対応」だったが、2026-09-05に実データ
+（2件、いずれもISO日時文字列）が入っていることを確認した。フィールド追加自体は
+（手動作業と思われるが）完了済みであり、24時間ロック・カード削除の遅延削除は
+機能している前提でよい。
 
 詳細は[docs/内部仕様_解約.md](docs/内部仕様_解約.md)・
 [docs/外部仕様_解約.md](docs/外部仕様_解約.md)参照。
