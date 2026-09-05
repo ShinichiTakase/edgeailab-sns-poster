@@ -50,6 +50,7 @@ router.get("/api/admin/posts", async (req, res) => {
       adminEmail: resolveEmail(log.customer_code, log.created_by),
       platform: platformLabelFor(log.platform),
       result: "成功",
+      content: log.content || "",
     }));
     const failureRows = failures.map((a) => ({
       id: a.id,
@@ -57,6 +58,10 @@ router.get("/api/admin/posts", async (req, res) => {
       adminEmail: resolveEmail(a.customerCode, a.createdBy),
       platform: platformLabelFor(a.platform),
       result: "失敗",
+      // 失敗時はお知らせの本文（TimeStamp/SNS/対象/Results/Detail/Bodyの整形済みテキスト、
+      // postFailureAnnouncer.js参照）をそのまま使う。投稿文章だけでなく失敗理由も
+      // 合わせて確認できる方が管理者にとって有用なため、あえて投稿文章のみに絞らない。
+      content: a.body || "",
     }));
 
     const merged = [...successRows, ...failureRows].sort(
