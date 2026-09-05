@@ -69,18 +69,20 @@ function countCanceledInMonth(customers, start, end) {
 }
 
 /**
- * 指定期間の全顧客合算の「投稿数」（SNS毎・合計）と「売上高」（従量料金のみ、
- * 基本料金は含まない）を1回の顧客走査でまとめて計算する。
+ * 指定期間の全顧客合算の「投稿数」（SNS毎・合計）と「売上高」（従量料金・
+ * Xサーチャージ・基本料金）を1回の顧客走査でまとめて計算する。
  *
  * 売上高の按分について: Stripeの従量料金は顧客ごとの「全SNS合計投稿数」に対する
  * 階層価格（例: 150件まで¥30/件、以降¥20/件）で決まり、SNS単体の金額という概念が
  * 元々存在しない。そのため「SNS毎の売上高」は、顧客ごとに計算した従量料金の合計額を、
  * その顧客のプラットフォーム別投稿数の比率で按分した近似値であり、実際の請求明細の
  * 内訳ではない。Xサーチャージは実際のX URL付き投稿数から個別に計算するため、
- * 近似ではなく正確な金額になる。
+ * 近似ではなく正確な金額になる。基本料金はプランの固定額のため按分の必要が無い
+ * （投稿数に依存しない合計額のみ）。
  *
  * 売上計上の対象は本稼働中（status: active）の顧客のみ（トライアル中はまだ課金
- * されておらず、解約済みはStripeサブスクリプションが既に無いため）。
+ * されておらず、解約済みはStripeサブスクリプションが既に無いため）。基本料金も
+ * 同じ対象（本稼働中の顧客のみ）に対して計上する。
  */
 async function computePeriodStats(customers, stripe, start, end) {
   const postCounts = emptyPlatformCounts();
@@ -88,11 +90,12 @@ async function computePeriodStats(customers, stripe, start, end) {
   const revenueCounts = emptyPlatformCounts();
   let revenueTotal = 0;
   let xSurcharge = 0;
+  let baseFee = 0;
 
   if (!(start < end)) {
     return {
       posts: { counts: postCounts, total: postTotal },
-      revenue: { counts: revenueCounts, total: revenueTotal, xSurcharge },
+      revenue: { counts: revenueCounts, total: revenueTotal, xSurcharge, baseFee },
     };
   }
 
@@ -103,10 +106,11 @@ async function computePeriodStats(customers, stripe, start, end) {
     if (priceCache.has(plan)) return priceCache.get(plan);
     const ids = pricesForPlan(plan);
     const promise =
-      ids && ids.metered && ids.meteredX
+      ids && ids.metered && ids.meteredX && ids.base
         ? Promise.all([
             stripe.prices.retrieve(ids.metered, { expand: ["tiers"] }),
             stripe.prices.retrieve(ids.meteredX, { expand: ["tiers"] }),
+            stripe.prices.retrieve(ids.base),
           ])
         : Promise.resolve(null);
     priceCache.set(plan, promise);
@@ -125,7 +129,9 @@ async function computePeriodStats(customers, stripe, start, end) {
       const plan = planKey(customer);
       const prices = plan && (await pricesForPlanCached(plan));
       if (!prices) return;
-      const [meteredPrice, meteredXPrice] = prices;
+      const [meteredPrice, meteredXPrice, basePrice] = prices;
+
+      baseFee += basePrice.unit_amount || 0;
 
       const meteredRevenue = computePriceAmount(meteredPrice, counts.totalCount);
       const xRevenue = computePriceAmount(meteredXPrice, counts.xUrlCount);
@@ -143,7 +149,12 @@ async function computePeriodStats(customers, stripe, start, end) {
   for (const platform of PLATFORMS) revenueCounts[platform] = Math.round(revenueCounts[platform]);
   return {
     posts: { counts: postCounts, total: postTotal },
-    revenue: { counts: revenueCounts, total: Math.round(revenueTotal), xSurcharge: Math.round(xSurcharge) },
+    revenue: {
+      counts: revenueCounts,
+      total: Math.round(revenueTotal),
+      xSurcharge: Math.round(xSurcharge),
+      baseFee: Math.round(baseFee),
+    },
   };
 }
 
@@ -232,11 +243,28 @@ async function getAdminStats(stripe) {
     },
     posts: { lastMonth: lastMonthSnapshot.posts, thisMonth: thisMonthSnapshot.posts },
     revenue: {
-      lastMonth: { counts: lastMonthSnapshot.revenue.counts, total: lastMonthSnapshot.revenue.total },
-      thisMonth: { counts: thisMonthSnapshot.revenue.counts, total: thisMonthSnapshot.revenue.total },
-      xSurcharge: { lastMonth: lastMonthSnapshot.revenue.xSurcharge, thisMonth: thisMonthSnapshot.revenue.xSurcharge },
+      lastMonth: buildRevenueView(lastMonthSnapshot.revenue),
+      thisMonth: buildRevenueView(thisMonthSnapshot.revenue),
     },
     generatedAt: { lastMonth: lastMonthSnapshot.generatedAt, thisMonth: thisMonthSnapshot.generatedAt },
+  };
+}
+
+// レスポンス用に売上高の内訳を整形する。2026-09-05変更: Xサーチャージは独立した
+// セクションではなく「Xの従量料金」の内訳として返す（フロント側でXの行の下に
+// ネストして表示する）。基本料金も追加する。
+// usageTotal = SNS毎の従量料金合計（meteredTotal）＋Xサーチャージ（＝画面上、
+// Xの行とXサーチャージ行を含む全SNS行の合計と一致する値）。
+// grandTotal = usageTotal ＋ 基本料金。
+function buildRevenueView(revenue) {
+  const usageTotal = revenue.total + revenue.xSurcharge;
+  return {
+    counts: revenue.counts,
+    meteredTotal: revenue.total,
+    xSurcharge: revenue.xSurcharge,
+    usageTotal,
+    baseFee: revenue.baseFee,
+    grandTotal: usageTotal + revenue.baseFee,
   };
 }
 
