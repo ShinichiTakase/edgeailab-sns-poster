@@ -1,5 +1,7 @@
 // プラン⇔Stripe Price IDのマッピング。billing.js（チェックアウトセッション作成）と
 // 既存customerへのXサーチャージPrice追加スクリプトの両方から参照する単一情報源。
+const { getCurrentPriceId } = require("./xSurchargeStore");
+
 function planKey(customer) {
   // customers.plan はセレクト項目のため ["Standard"] のような配列・先頭大文字で
   // 返ってくる。ここで小文字キー（basic/standard/advanced）に正規化する。
@@ -25,7 +27,14 @@ function pricesForPlan(plan) {
       meteredX: process.env.STRIPE_PRICE_ADVANCED_METERED_X,
     },
   };
-  return map[plan] || null;
+  const prices = map[plan];
+  if (!prices) return null;
+  // Xサーチャージの金額変更（管理者ダッシュボード、予約日に自動適用）はStripe Priceを
+  // 新規作成して差し替える方式のため、新しいPrice IDは環境変数（デプロイ時固定）ではなく
+  // json/x_surcharge_current.json（xSurchargeStore.js、xSurchargeScheduleApply.js参照）に
+  // 実行時に書き込まれる。適用済みならそちらを優先し、無ければ環境変数のまま。
+  const overrideMeteredX = getCurrentPriceId(plan);
+  return overrideMeteredX ? { ...prices, meteredX: overrideMeteredX } : prices;
 }
 
 // StripeのPrice IDから、どのプラン・どの種別（base/metered/meteredX）かを逆引きする。

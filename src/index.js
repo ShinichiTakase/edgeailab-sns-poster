@@ -21,6 +21,11 @@ const approvalsRoutes = require("./routes/approvals");
 const invoicesRoutes = require("./routes/invoices");
 const announcementsRoutes = require("./routes/announcements");
 const adminStatsRoutes = require("./routes/adminStats");
+const adminCustomersRoutes = require("./routes/adminCustomers");
+const adminPostsRoutes = require("./routes/adminPosts");
+const adminPasswordResetRoutes = require("./routes/adminPasswordReset");
+const adminXSurchargeRoutes = require("./routes/adminXSurcharge");
+const adminServerResourcesRoutes = require("./routes/adminServerResources");
 
 const app = express();
 app.use("/uploads", express.static(path.join(__dirname, "..", "uploads")));
@@ -43,6 +48,11 @@ app.use(approvalsRoutes);
 app.use(invoicesRoutes);
 app.use(announcementsRoutes);
 app.use(adminStatsRoutes);
+app.use(adminCustomersRoutes);
+app.use(adminPostsRoutes);
+app.use(adminPasswordResetRoutes);
+app.use(adminXSurchargeRoutes);
+app.use(adminServerResourcesRoutes);
 
 const port = process.env.PORT || 3000;
 app.listen(port, () => {

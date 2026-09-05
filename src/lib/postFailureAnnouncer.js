@@ -37,8 +37,10 @@ function extractErrorDetail(err) {
  * @param {string} content 投稿本文
  * @param {Error} err 投稿失敗時にthrowされたエラー
  * @param {string|null} scheduleName 予約投稿由来の場合のスケジュール名。ワンショット投稿はnull
+ * @param {string} createdBy 投稿を実行しようとしたユーザーid（管理者ダッシュボード
+ *   「投稿一覧」がpostingLogStore.createPostingLogのcreated_byと同じ意味で使う）
  */
-function announcePostFailure({ customer, platform, content, err, scheduleName }) {
+function announcePostFailure({ customer, platform, content, err, scheduleName, createdBy }) {
   const timeLabel = formatTimestamp(new Date());
   const snsLabel = PLATFORM_DISPLAY_LABELS[platform] || platform;
   const target = scheduleName ? `スケジュール「${scheduleName}」` : "ワンショット投稿";
@@ -53,7 +55,7 @@ function announcePostFailure({ customer, platform, content, err, scheduleName })
     `Body: ${content || ""}`,
   ].join("\n");
 
-  createAnnouncement({ customerCode: customer.id, type: "post_failure", title, body });
+  createAnnouncement({ customerCode: customer.id, type: "post_failure", title, body, platform, createdBy });
 }
 
 module.exports = { announcePostFailure };

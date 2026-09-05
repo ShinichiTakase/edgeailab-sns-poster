@@ -149,6 +149,31 @@ async function listAllPostingLogsForCustomer(customerCode) {
   return all;
 }
 
+/**
+ * 全顧客横断で投稿ログを全件取得する（管理者ダッシュボード「投稿一覧」用。ページング）。
+ * 顧客数・投稿数が増えると重くなる（全件フェッチ）点はlistAllPostingLogsForCustomerと
+ * 同じ制約。将来的に問題になるようであれば、管理者ダッシュボードの他の一覧と同様に
+ * バッチキャッシュ化を検討すること。
+ */
+async function listAllPostingLogsAcrossCustomers() {
+  const all = [];
+  const limit = 100;
+  let offset = 0;
+  for (;;) {
+    const res = await microcmsFetch(`/posting_logs?orders=-posted_at&limit=${limit}&offset=${offset}`);
+    if (!res.ok) {
+      const text = await res.text().catch(() => "");
+      throw new Error(`[postingLogStore] listAllPostingLogsAcrossCustomers failed ${res.status} ${text.slice(0, 300)}`);
+    }
+    const json = await res.json();
+    const contents = Array.isArray(json.contents) ? json.contents : [];
+    all.push(...contents);
+    if (contents.length < limit) break;
+    offset += limit;
+  }
+  return all;
+}
+
 async function deletePostingLog(id) {
   const res = await microcmsFetch(`/posting_logs/${encodeURIComponent(id)}`, { method: "DELETE" });
   if (!res.ok && res.status !== 404) {
@@ -176,6 +201,7 @@ module.exports = {
   listPostingLogsForCustomer,
   listPostingLogsForCustomerInRange,
   listAllPostingLogsForCustomer,
+  listAllPostingLogsAcrossCustomers,
   deletePostingLog,
   getPostStatsForCustomer,
   getActualPostCounts,

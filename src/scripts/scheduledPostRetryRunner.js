@@ -83,7 +83,7 @@ async function main() {
         }
         if (customer) {
           try {
-            announcePostFailure({ customer, platform, content: post.content, err, scheduleName });
+            announcePostFailure({ customer, platform, content: post.content, err, scheduleName, createdBy: post.created_by });
           } catch (annErr) {
             logError(`[scheduled-post-retry-runner] announcement create failed id=${post.id}:`, annErr);
           }

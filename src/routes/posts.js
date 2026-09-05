@@ -209,7 +209,7 @@ router.post(
         const isInstagramTimeout = err.message && err.message.startsWith("instagram_processing_timeout");
         results[platform] = { ok: false, error: isInstagramTimeout ? "instagram_processing_timeout" : "post_failed" };
         try {
-          announcePostFailure({ customer: req.customer, platform, content: text, err, scheduleName: null });
+          announcePostFailure({ customer: req.customer, platform, content: text, err, scheduleName: null, createdBy: req.user.userId });
         } catch (annErr) {
           console.error(`[posts] announcement create failed customerId=${customerId} platform=${platform}:`, annErr);
         }

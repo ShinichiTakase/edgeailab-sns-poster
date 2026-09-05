@@ -34,8 +34,13 @@ function loadReads() {
   return loadJson(READS_PATH) || {};
 }
 
-/** お知らせを1件追加する。typeは将来の拡張用（当面 "post_failure" のみ発生）。 */
-function createAnnouncement({ customerCode, type, title, body }) {
+/**
+ * お知らせを1件追加する。typeは将来の拡張用（当面 "post_failure" のみ発生）。
+ * platform・createdByは管理者ダッシュボード「投稿一覧」が失敗行を組み立てる際に
+ * 文字列パース無しで使えるよう、title/bodyとは別に構造化して保持する
+ * （2026-09-05追加。それ以前に作成されたレコードには存在しない）。
+ */
+function createAnnouncement({ customerCode, type, title, body, platform, createdBy }) {
   const list = loadAnnouncements();
   list.push({
     id: `${Date.now().toString(36)}-${crypto.randomBytes(4).toString("hex")}`,
@@ -43,6 +48,8 @@ function createAnnouncement({ customerCode, type, title, body }) {
     type,
     title,
     body,
+    platform: platform || null,
+    createdBy: createdBy || null,
     createdAt: new Date().toISOString(),
   });
 
@@ -78,4 +85,9 @@ function markRead(userId) {
   saveJson(READS_PATH, reads);
 }
 
-module.exports = { createAnnouncement, listForCustomer, hasUnread, markRead };
+/** 全顧客横断で指定type（例: "post_failure"）のお知らせを返す（管理者ダッシュボード用）。 */
+function listAllOfType(type) {
+  return loadAnnouncements().filter((a) => a.type === type);
+}
+
+module.exports = { createAnnouncement, listForCustomer, hasUnread, markRead, listAllOfType };

@@ -189,6 +189,25 @@ async function listAllCustomers() {
   return all;
 }
 
+/**
+ * 管理者ダッシュボード「利用者一覧」用。メールアドレス（部分一致）・status（完全一致、
+ * ただしセレクト項目のため[contains]を使う）で絞り込み、新規登録が新しい順
+ * （microCMSの`createdAt`降順）でページングして返す。
+ */
+async function listCustomersFiltered({ email, status, limit = 50, offset = 0 }) {
+  const filterParts = [];
+  if (email) filterParts.push(`email[contains]${email.trim()}`);
+  if (status) filterParts.push(`status[contains]${status}`);
+  const filtersQuery = filterParts.length ? `&filters=${encodeURIComponent(filterParts.join("[and]"))}` : "";
+  const res = await microcmsFetch(`/customers?orders=-createdAt&limit=${limit}&offset=${offset}${filtersQuery}`);
+  if (!res.ok) {
+    const text = await res.text().catch(() => "");
+    throw new Error(`[customerStore] listCustomersFiltered failed ${res.status} ${text.slice(0, 300)}`);
+  }
+  const json = await res.json();
+  return { contents: Array.isArray(json.contents) ? json.contents : [], totalCount: json.totalCount || 0 };
+}
+
 /** メールアドレスに一致する users 要素を持つ顧客を探す（本人・招待メンバー問わず） */
 async function findCustomerAndUserByEmail(email) {
   const target = email.trim().toLowerCase();
@@ -394,6 +413,31 @@ async function resetPassword(customerId, resetToken, passwordHash) {
   newUsers[index] = updatedUser;
   await updateCustomer(customerId, { users: newUsers });
   return updatedUser;
+}
+
+/**
+ * 管理者ダッシュボードの「パスワード初期化」用。トークンを経由せず、メールアドレスで
+ * 特定したユーザーのpasswordHashを直接差し替える。resetPassword（トークン検証済み）
+ * と同じく、sessionVersionをインクリメントして発行済みの全JWTを無効化する。
+ * @returns {customer, user}（更新後のuser）。該当ユーザーが見つからなければnull
+ */
+async function adminSetPassword(email, passwordHash) {
+  const found = await findCustomerAndUserByEmail(email);
+  if (!found) return null;
+  const { customer, user } = found;
+  const users = Array.isArray(customer.users) ? customer.users : [];
+  const index = users.findIndex((u) => u.userId === user.userId);
+  if (index === -1) return null;
+
+  const updatedUser = {
+    ...users[index],
+    passwordHash,
+    sessionVersion: (Number(users[index].sessionVersion) || 0) + 1,
+  };
+  const newUsers = [...users];
+  newUsers[index] = updatedUser;
+  await updateCustomer(customer.id, { users: newUsers });
+  return { customer, user: updatedUser };
 }
 
 /**
@@ -702,11 +746,13 @@ module.exports = {
   listCustomersForTrialReminder,
   listCustomersOverTrialPostLimit,
   listAllCustomers,
+  listCustomersFiltered,
   findCustomerAndUserByEmail,
   findCustomerAndUserByInvitationToken,
   findCustomerAndUserByResetToken,
   setPasswordResetToken,
   resetPassword,
+  adminSetPassword,
   roleOf,
   invitationStatusOf,
   addInvitedUser,

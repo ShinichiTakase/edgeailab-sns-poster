@@ -212,6 +212,24 @@ const PASSWORD_RESET_EMAIL = {
     ].join("\n"),
 };
 
+// 管理者ダッシュボード「パスワード初期化」用。自分でパスワード再設定ができない
+// ユーザー向けに、運営側が新しいパスワードを直接発行してメールで案内する
+// （PASSWORD_RESET_EMAILのようなトークン付きリンクではなく、パスワードそのものを
+// 本文に記載する。ログイン後の変更はchange-password.htmlから可能）。
+const ADMIN_PASSWORD_RESET_EMAIL = {
+  subject: "【EdgeAI Lab】パスワードが初期化されました",
+  body: (newPassword) =>
+    [
+      "運営者によりパスワードが初期化されました。",
+      "",
+      "新しいパスワード:",
+      newPassword,
+      "",
+      "ログイン後、お手数ですがパスワード変更画面から新しいパスワードに変更してください。",
+      "心当たりがない場合は、お手数ですがサポートまでご連絡ください。",
+    ].join("\n"),
+};
+
 module.exports = {
   VERIFICATION_EMAIL,
   TRIAL_ENDING_EMAIL,
@@ -225,5 +243,6 @@ module.exports = {
   SCHEDULED_POST_RESULT_EMAIL,
   ONE_SHOT_POST_RESULT_EMAIL,
   PASSWORD_RESET_EMAIL,
+  ADMIN_PASSWORD_RESET_EMAIL,
   planLabel,
 };
