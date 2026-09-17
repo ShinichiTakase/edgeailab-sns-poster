@@ -25,14 +25,15 @@ const FPS = 30;
 // HOLD_SECを1.5→2.5に延長した際（2026-08-31）、HOLD_FRAMESは開始のタイトル表示・終了間際の
 // 無地区間の両方に使われる（ACTIVE_FRAMES = TOTAL_FRAMES - HOLD_FRAMES*2）ため、本文アニメーション
 // の実時間（ACTIVE_FRAMES）を変えないよう、その2倍（延長分1秒×2箇所=2秒）をDURATION_SECにも
-// 加算している。
-const DURATION_SEC = 20.5;
+// 加算している。2026-09-18、HOLD_SECを2.5→2.0に短縮した際も同じ理由で、短縮分0.5秒×2箇所=1秒を
+// DURATION_SECから差し引いている（20.5→19.5）。
+const DURATION_SEC = 19.5;
 const TOTAL_FRAMES = FPS * DURATION_SEC;
 // ループ再生時に不自然な切り替わりが目立たないよう、開始・終了付近はテキストなしの
 // 背景のみにする（フッターは常時表示のまま）。タイトル表示は0.5秒では短すぎるという
 // 指摘のため1.5秒に延長し（2026-08-28）、それでも読み切れないという指摘のため
-// 2.5秒に再延長した（2026-08-31）。
-const HOLD_SEC = 2.5;
+// 2.5秒に再延長した（2026-08-31）。2026-09-18、表示時間を2.0秒に調整した。
+const HOLD_SEC = 2.0;
 const HOLD_FRAMES = Math.round(HOLD_SEC * FPS);
 const ACTIVE_FRAMES = TOTAL_FRAMES - HOLD_FRAMES * 2;
 // Instagram側のシームレスなループ再生だと、次の周回が即座に始まって不自然に
@@ -230,19 +231,21 @@ function easeOutCubic(t) {
 // 0フレーム目を含む区間）----------
 // キャプション本文とは別のタイトルフィールドはデータモデルに存在しないため、本文の
 // 先頭段落（改行区切りの最初のまとまり）を抜き出してタイトルとして使う。
-const TITLE_MAX_LINES = 2;
+const TITLE_MAX_LINES = 3;
 
 function extractTitleSource(captionText) {
   const firstParagraph = (captionText || "").split(/\n+/).find((p) => p.trim().length > 0) || "";
   return firstParagraph.trim();
 }
 
-// 本文用のwrapCaption/fitCaptionと同じ縮小ロジックだが、1〜2行に収まるまで縮小する点が
+// 本文用のwrapCaption/fitCaptionと同じ縮小ロジックだが、1〜3行に収まるまで縮小する点が
 // 異なる（タイトルは短い見出しとして表示するため、本文より大きいフォントサイズから始める）。
-// 最小サイズでも2行に収まらない場合は、末尾を省略記号で切り詰める。
+// 最小サイズでも3行に収まらない場合は、末尾を省略記号で切り詰める。
+// フォントサイズは小さく読みにくいという指摘のため、初期・最小サイズとも一回り
+// 大きくした（108→120, 56→64、2026-09-18）。
 function fitTitle(ctx, text, maxWidth) {
-  let fontSize = 108;
-  const minSize = 56;
+  let fontSize = 120;
+  const minSize = 64;
   let lines = wrapCaption(ctx, text, maxWidth, fontSize);
   let lineHeight = Math.round(fontSize * 1.3);
   while (fontSize > minSize && lines.length > TITLE_MAX_LINES) {
