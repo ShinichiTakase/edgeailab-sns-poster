@@ -4,6 +4,7 @@ const { generatePostCopy, generatePostCopyVariations } = require("../lib/postCop
 const { fetchUrlText } = require("../lib/urlTextFetcher");
 const { classifyFetchError, classifyGenerationError } = require("../lib/generationErrors");
 const { getDocsNumber } = require("../lib/generationConfig");
+const { extractFirstUrl } = require("../lib/urlDetection");
 
 const router = express.Router();
 
@@ -44,8 +45,15 @@ router.post("/api/ai/generate-post", requireAuth, blockExpiredTrialJson, blockVi
     return res.status(400).json({ error: "source_text_required" });
   }
 
+  // 原文中にURLが含まれる場合、generatePostCopyへ別パラメータとしても渡す。
+  // これによりプロンプトに「URLを省略禁止」の必須指示が乗り、生成結果からURLが
+  // 欠落していた場合の機械的な補完（ensureUrlIncluded）も働くようになる
+  // （urlパラメータなしだとThreads向けで要点圧縮の指示とだけ組み合わさり、
+  // AIがURLを非本質的な情報として省略してしまうことがあった）。
+  const url = extractFirstUrl(sourceText);
+
   try {
-    const results = await generatePostCopy({ sourceText, platforms });
+    const results = await generatePostCopy({ sourceText, platforms, url });
     res.json({ results });
   } catch (err) {
     handleGenerationError(res, err, "[ai/generate-post]", req.customer.id);
@@ -104,8 +112,12 @@ router.post(
       return res.status(400).json({ error: "source_text_required" });
     }
 
+    // generate-post同様、原文中のURLをgeneratePostCopyVariationsへも渡し、
+    // Threads向け生成でURLが欠落しないようにする（詳細はgenerate-postの同処理コメント参照）。
+    const url = extractFirstUrl(sourceText);
+
     try {
-      const results = await generatePostCopyVariations({ sourceText, platforms, count: getDocsNumber() });
+      const results = await generatePostCopyVariations({ sourceText, platforms, url, count: getDocsNumber() });
       console.log(
         `[timing] ai/generate-post-variations platforms=${platforms.join(",")} totalMs=${Date.now() - __routeT0}`
       );
