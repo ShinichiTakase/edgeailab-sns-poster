@@ -47,10 +47,15 @@ async function refreshOne(slug, xData) {
 async function main() {
   const store = loadStore();
   const now = Date.now();
+  const seen = new Set();
   const targets = Object.entries(store).filter(([, data]) => {
     const x = data.x;
     if (!x || !x.refresh_token || !x.token_expires_at) return false;
-    return new Date(x.token_expires_at).getTime() - now <= REFRESH_WINDOW_MS;
+    if (new Date(x.token_expires_at).getTime() - now > REFRESH_WINDOW_MS) return false;
+    const accountKey = String(x.user_id || x.username || x.refresh_token);
+    if (seen.has(accountKey)) return false;
+    seen.add(accountKey);
+    return true;
   });
 
   if (targets.length === 0) {
@@ -77,7 +82,9 @@ async function main() {
   }
 }
 
-main().catch((err) => {
+if (require.main === module) main().catch((err) => {
   console.error("[x-refresh] unexpected failure:", err);
   process.exit(1);
 });
+
+module.exports = { main, refreshOne };
