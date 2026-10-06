@@ -1,7 +1,5 @@
 const express = require("express");
 const crypto = require("crypto");
-const fs = require("fs");
-const path = require("path");
 const { savePlatformTokens, deletePlatformTokensByUserId, findDuplicateOwner } = require("../lib/tokenStore");
 const { checkTrialHistoryHit, recordConnectionForHistory } = require("../lib/trialHistoryGuard");
 const pkceStore = require("../lib/pkceStore");
@@ -10,36 +8,7 @@ const { requireSnsConnectionAvailable } = require("../middleware/snsConnectionGu
 
 const router = express.Router();
 
-// x-refresh.log と同様、json/ 配下（volumeマウントでコンテナ再ビルド後も残る）に
-// 標準出力とは別で永続化する。docker logsのローテーションで消える前の記録用。
-const LOG_FILE = path.join(__dirname, "..", "..", "json", "facebook.log");
-
-function writeLogFile(level, args) {
-  const message = args
-    .map((a) => (a instanceof Error ? a.stack : typeof a === "object" ? JSON.stringify(a) : a))
-    .join(" ");
-  const line = `${new Date().toISOString()} [${level}] ${message}\n`;
-  try {
-    fs.appendFileSync(LOG_FILE, line);
-  } catch (err) {
-    console.error("[facebook] failed to write log file:", err);
-  }
-}
-
-function logInfo(...args) {
-  console.info(...args);
-  writeLogFile("info", args);
-}
-
-function logWarn(...args) {
-  console.warn(...args);
-  writeLogFile("warn", args);
-}
-
-function logError(...args) {
-  console.error(...args);
-  writeLogFile("error", args);
-}
+const { logInfo, logWarn, logError } = require("../lib/logger").createLogger("facebook.log");
 
 const SUCCESS_HTML = `<!doctype html>
 <html lang="ja"><head><meta charset="utf-8"><title>連携完了</title>

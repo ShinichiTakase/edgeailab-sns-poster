@@ -1,3 +1,4 @@
+process.env.SNS_POSTER_DATA_SOURCE = "test-legacy";
 // trialLimitAutoActivation.js のリグレッションテスト。
 // 「支払い方法未登録なら何もしない」「登録済みならサブスクリプションを即時作成し
 // status:'active'へ切り替える」「作成直後の決済が失敗（incomplete等）した場合は

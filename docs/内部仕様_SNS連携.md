@@ -495,3 +495,9 @@ Meta審査（App Review）自体はまだ完了しておらず現在もDevモー
   意図的な設計ではなく、上記「SNS連携履歴によるトライアル濫用防止」の穴の一部として
   発見されたもの。disconnect側にガードを追加する対策は取らず、SNS連携履歴
   （`sns_history.json`）側で濫用を検知する方針とした（理由は同セクション参照）
+
+## SQLite-only連携情報と整合性監査（2026-10-07）
+
+SNS account/tokenの唯一のruntime sourceはSQLiteの `social_accounts`、`social_account_pages`、`social_account_history` である。tokenはAES-256-GCM暗号文として保持する。`json/client_tokens.json` と `json/sns_history.json` は移行前archiveであり、接続表示、重複アカウント判定、token refresh、投稿、孤立判定には使用しない。
+
+`orphanSnsTokenCheck.js` はSQLite内の顧客relation、active accountと解約顧客の不整合、external account重複、token expiry形式、暗号文の復号可能性を監査する。自動修正および外部SNS API照会は行わない。

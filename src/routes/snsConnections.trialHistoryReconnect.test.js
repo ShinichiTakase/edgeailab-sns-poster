@@ -1,3 +1,4 @@
+process.env.SNS_POSTER_DATA_SOURCE = "test-legacy";
 // POST /api/sns-connections/confirm-trial-history-reconnect のリグレッションテスト。
 // SNS連携履歴（sns_history.json）ヒット時の確認ダイアログ「連携」を確定する
 // エンドポイント（2026-09-01追加、トライアル濫用防止）。
@@ -65,7 +66,7 @@ test.before(async () => {
 });
 
 test.after(async () => {
-  await new Promise((resolve) => server.close(resolve));
+  await new Promise((resolve) => { server.close(resolve); server.closeAllConnections?.(); });
 });
 
 function authedPostJson(customer, apiPath, body) {

@@ -2,13 +2,15 @@ const path = require("path");
 const { openDatabase } = require("../db/connection");
 const { keyringFromEnv } = require("../security/tokenCrypto");
 
-const ALLOWED = new Set(["microcms", "sqlite"]);
 let singleton;
 
 function getDataSourceName(env = process.env) {
-  const value = String(env.SNS_POSTER_DATA_SOURCE || "microcms").trim().toLowerCase();
-  if (!ALLOWED.has(value)) throw new Error(`Invalid SNS_POSTER_DATA_SOURCE: ${value}`);
-  return value;
+  const raw = env.SNS_POSTER_DATA_SOURCE;
+  const value = typeof raw === "string" ? raw.trim().toLowerCase() : "";
+  if (value !== "sqlite") {
+    throw new Error("SNS_POSTER_DATA_SOURCE=sqlite is required; legacy data sources and implicit fallback are disabled");
+  }
+  return "sqlite";
 }
 
 function sqliteConfig(env = process.env) {
@@ -23,9 +25,9 @@ function getSqliteContext(env = process.env) {
     const config = sqliteConfig(env);
     const db = openDatabase(config.filename);
     const latest = db.prepare("SELECT version FROM schema_migrations ORDER BY version DESC LIMIT 1").get();
-    if (!latest || Number(latest.version) < 4) {
+    if (!latest || Number(latest.version) < 5) {
       db.close();
-      throw new Error("SQLite schema is not migrated through change-journal coverage; automatic migration is disabled");
+      throw new Error("SQLite schema is not migrated through SQLite-only runtime support; automatic migration is disabled");
     }
     singleton = { db, keyring: config.keyring, filename: config.filename };
   }

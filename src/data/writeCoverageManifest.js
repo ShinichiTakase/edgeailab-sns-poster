@@ -26,11 +26,12 @@ const COVERAGE = Object.freeze([
   ...["create","consume"].map(api=>({api:`oauthStateRepository.${api}`,category:"C",tables:["oauth_states"],secretSafe:true})),
   ...["put","take"].map(api=>({api:`pkceStore.${api}`,category:"C",tables:["oauth_states"],secretSafe:true})),
   ...["migrate","rollbackLast"].map(api=>({api:`migrationRunner.${api}`,category:"C",tables:["schema_migrations"]})),
+  ...["writeCache"].map(api=>({api:`adminStats.${api}`,category:"C",tables:["admin_stats_cache"]})),
   {api:"shadowImporter.importBundle",category:"C",tables:["migration_runs","migration_imports","migration_quarantine"]},
   ...["record","mutate"].map(api=>({api:`changeJournal.${api}`,category:"C",tables:["change_journal"],secretSafe:true})),
 ]);
 
 const JOURNALED_TABLES=Object.freeze(["customers","users","user_approvers","social_accounts","social_account_pages","social_account_history","schedules","schedule_platforms","schedule_weekdays","schedule_slots","schedule_texts","schedule_text_variants","schedule_text_approvals","scheduled_posts","scheduled_post_approvals","posting_logs","notifications","notification_reads","x_surcharge_versions"]);
 const LEDGER_TABLES=Object.freeze(["scheduled_post_jobs","scheduled_post_attempts","scheduled_post_effects","billing_meter_events","stripe_webhook_events"]);
-const TECHNICAL_TABLES=Object.freeze(["oauth_states","schema_migrations","migration_runs","migration_imports","migration_quarantine","change_journal","audit_logs"]);
+const TECHNICAL_TABLES=Object.freeze(["oauth_states","schema_migrations","migration_runs","migration_imports","migration_quarantine","change_journal","audit_logs","admin_stats_cache"]);
 module.exports={COVERAGE,JOURNALED_TABLES,LEDGER_TABLES,TECHNICAL_TABLES};

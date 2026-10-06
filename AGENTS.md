@@ -21,8 +21,8 @@
 - 共有のnginx-proxy/acmeが存在する。プロジェクト専用の別proxy/acmeを追加しない。
 - 確認時点でAPIコンテナのホスト公開ポートはなく、nginxから内部3000番へ転送する。
 - Composeの `env_file` はこのプロジェクトの `.env` を参照。ソースのdotenv参照だけで実際の供給方式を判断しない。
-- APIコンテナの永続マウントは `json/` → `/app/json`、`uploads/` → `/app/uploads`。ソースのbind mountは確認されていない。
-- データはmicroCMSとローカルJSONを併用。`json/` をキャッシュだけのディレクトリとみなして削除しない。
+- APIとbatchの永続マウントはSQLite `data/` → `/app/data`、専用log `logs/` → `/app/logs`、archive `json/` → `/app/json`（read-only）、`uploads/` → `/app/uploads`。
+- 構造化業務データと実行状態の唯一のruntime sourceはSQLite。microCMSと`json/`はmigration・rollback archiveとして保持し、通常runtimeからread/writeしない。
 - 各定期ジョブにも個別のbuild定義がある。APIの `sns-poster` だけの再ビルドで全ジョブが更新されると仮定せず、許可されたデプロイ前に各イメージと反映対象を確認する。
 - Dockerfileはpackage-lock.jsonをコピーせず `npm install --omit=dev` を実行する構成。再ビルド時の依存再現性は確認事項であり、移行だけを理由に変更しない。
 
@@ -38,13 +38,13 @@
 
 ## 投稿・再試行・課金
 
-- 予約はmicroCMSの `scheduled_posts`。状態は `pending` / `done` / `failed`。
+- 予約はSQLiteの `scheduled_posts` と `scheduled_post_jobs`。job状態は `pending` / `processing` / `sent` / `done` / `ambiguous` / `failed` / `canceled`。
 - `scheduleMaterializer.js` が予約を生成し、`scheduledPostRunner.js` と `scheduledPostRetryRunner.js` が共通の `scheduledPostExecutor.js` を使う。
 - 確認済み予約投稿の順序は、SNS投稿成功 → `done`保存 → トライアル集計・通知等 → Stripeメーター送信 → 投稿ログ作成。
 - 課金イベント送信はSNS投稿成功後の経路にある。投稿失敗に対して課金していると誤記しない。
 - 課金イベントや投稿ログの送信失敗は捕捉してログへ記録し、投稿そのものを再試行させない。欠落分の回復経路は未確認。
 - SNS投稿成功後に `done` 保存が失敗すると、通常runnerが失敗扱いとして再試行へ回し得る。重複投稿の発生実績は未確認。障害対応で安易に再実行しない。
-- 再試行情報は `json/scheduled_post_retries.json`。初回失敗後、3分後以降に最大3回の再試行を管理する。cronの起動時刻に依存し、厳密に3分後の実行を保証しない。
+- 再試行情報はSQLite `scheduled_post_jobs` / `scheduled_post_attempts` に保持する。`ambiguous` と `failed + next_attempt_at=null` は自動claimしない。
 - 確認したcron・起動指定・通常runnerには排他制御が見当たらず、再試行JSONはファイル全体を読み書きする。並行実行時の安全性は未検証。ロックや冪等性を全体として保証済みと扱わない。
 - Stripe Webhookは `/api/billing/webhook`。`express.raw` と署名検証を維持し、先行するJSON変換で署名検証を壊さない。
 - 予備カード再決済にはイベント単位の冪等性キーがあるが、全課金処理の重複防止が検証済みとはみなさない。
@@ -53,7 +53,7 @@
 
 - トライアルは表示30日、内部 `trialEndsAt` は33日。表示には `trialDisplayEndsAt` を使う。課金予測の既契約者はStripeの実際のbilling_cycle_anchorを使う実装があるため、用途を区別する。
 - トライアル投稿上限は60通。継続スケジュールは投稿成功時、ワンショット予約は作成時に加算する既存設計で、二重加算しない。
-- SNSトークンは `json/client_tokens.json`。顧客削除はアプリの解約経由とし、microCMSから直接削除しない。孤児トークン検知は通知のみで自動削除しない。
+- SNSトークンはSQLite `social_accounts` にAES-256-GCMで暗号化保存する。孤立・整合性監査はSQLiteだけを参照し、通知のみで自動修正しない。
 - 解約時に最終請求の決済を試み、カードdetachは解約から23時間30分経過後のジョブで行う。同一メールの再登録は24時間ロックし、既存の検証アカウント例外を尊重する。
 - 顧客向けメールは `customerMailer.js` の共通署名を使用。テンプレートに署名を重複追加しない。運用障害通知は別経路。
 - 管理画面・管理APIは存在する。旧CLAUDE.mdの「管理GUIは存在しない」は古い記述。

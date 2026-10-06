@@ -22,6 +22,7 @@ test("every declared SQLite write API and discovered SQL write table has one aud
   const classified = new Set([...JOURNALED_TABLES, ...LEDGER_TABLES, ...TECHNICAL_TABLES]);
   const roots = [path.join(__dirname), path.join(__dirname, "../repositories"), path.join(__dirname, "../services")];
   const files = roots.flatMap((root) => fs.readdirSync(root).filter((name) => name.endsWith(".js") && !name.endsWith(".test.js")).map((name) => path.join(root, name)));
+  files.push(path.join(__dirname, "../lib/adminStats.js"));
   const discovered = new Set();
   for (const file of files) {
     const source = fs.readFileSync(file, "utf8");

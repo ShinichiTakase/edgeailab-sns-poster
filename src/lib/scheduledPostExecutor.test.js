@@ -1,3 +1,4 @@
+process.env.SNS_POSTER_DATA_SOURCE = "test-legacy";
 // attemptScheduledPost の「投稿成功時にtrialPostCountを加算するか」のリグレッションテスト。
 // 継続スケジュール（post_schedules）由来の投稿（source_schedule_idあり）でのみ加算し、
 // ワンショット予約投稿由来（source_schedule_idなし。posts.js側の作成時点で既に加算済み）は

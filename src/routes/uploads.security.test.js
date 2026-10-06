@@ -1,3 +1,4 @@
+process.env.SNS_POSTER_DATA_SOURCE = "test-legacy";
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const http = require("node:http");
@@ -39,7 +40,7 @@ test.before(async () => {
 });
 
 test.after(async () => {
-  await new Promise((resolve) => server.close(resolve));
+  await new Promise((resolve) => { server.close(resolve); server.closeAllConnections?.(); });
   fs.rmSync(uploadDir, { recursive: true, force: true });
 });
 

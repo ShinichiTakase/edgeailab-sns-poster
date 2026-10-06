@@ -1,5 +1,5 @@
 // 管理者ダッシュボード（edgeailab.net/admin/）の「前月」分集計（利用者数・投稿数・
-// 売上高）を月初にバッチで計算し、json/admin_stats_last_month.jsonへキャッシュする。
+// 売上高）を月初にバッチで計算し、SQLite admin_stats_cacheへキャッシュする。
 // 前月分は月が変わった後は絶対に値が変わらない確定データのため、ダッシュボード
 // 表示のたびに全顧客横断で都度計算せず、このキャッシュから読む
 // （src/lib/adminStats.js の getAdminStats 参照。キャッシュが無い/月がズレている

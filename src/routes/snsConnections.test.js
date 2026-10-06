@@ -1,3 +1,4 @@
+process.env.SNS_POSTER_DATA_SOURCE = "test-legacy";
 // POST /api/sns-connections/:platform/disconnect のリグレッションテスト。
 // 「連携解除しても、そのプラットフォーム宛ての未実行予約投稿（scheduled_posts,
 // status=pending）が残ったままになる」不具合の修正を継続的に守るためのもの。
@@ -76,7 +77,7 @@ test.before(async () => {
 });
 
 test.after(async () => {
-  await new Promise((resolve) => server.close(resolve));
+  await new Promise((resolve) => { server.close(resolve); server.closeAllConnections?.(); });
 });
 
 function authedPost(customer, path) {

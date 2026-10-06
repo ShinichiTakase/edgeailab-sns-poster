@@ -1,3 +1,4 @@
+process.env.SNS_POSTER_DATA_SOURCE = "test-legacy";
 // invoice.payment_failed Webhookハンドラ（handleInvoicePaymentFailed）のリグレッションテスト。
 // 「同一event.idの再送で通知メールが二重送信される」不具合と、「既に支払い済みのinvoiceに
 // 新しいevent.idで呼ばれても誤って運用アラートが飛ばない」ことを継続的に守るためのもの。

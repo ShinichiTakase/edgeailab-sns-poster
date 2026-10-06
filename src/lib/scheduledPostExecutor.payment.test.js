@@ -1,3 +1,4 @@
+process.env.SNS_POSTER_DATA_SOURCE = "test-legacy";
 // 本番データ・APIを使わず、課金切替後の連続予約と各SNSへの送信境界を検証する。
 const test = require('node:test');
 const assert = require('node:assert/strict');

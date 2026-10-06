@@ -169,7 +169,7 @@ test("isolated SQLite HTTP auth/dashboard/CRUD/admin/OAuth and scheduler flow", 
     Module._load = originalLoad;
     global.fetch = originalFetch;
     fs.readFileSync = originalRead; fs.writeFileSync = originalWrite; fs.appendFileSync = originalAppend;
-    if (server) await new Promise((resolve) => server.close(resolve));
+    if (server) { await new Promise((resolve) => { server.close(resolve); server.closeAllConnections?.(); }); }
     try { require("./data/dataSource").closeSqliteContext(); } catch {}
     fs.rmSync(dir, { recursive: true, force: true });
   }

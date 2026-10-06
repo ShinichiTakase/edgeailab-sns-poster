@@ -1,3 +1,4 @@
+process.env.SNS_POSTER_DATA_SOURCE = "test-legacy";
 // GET/DELETE /api/billing/payment-methods のリグレッションテスト。
 // 「metadata上のprimaryとStripe側default_payment_methodが食い違っている場合の同期」と、
 // 「削除したカードがprimaryタグでなくても、0枚になったらdefault_payment_methodを必ず
@@ -101,7 +102,7 @@ test.before(async () => {
 });
 
 test.after(async () => {
-  await new Promise((resolve) => server.close(resolve));
+  await new Promise((resolve) => { server.close(resolve); server.closeAllConnections?.(); });
 });
 
 function authedRequest(method, path) {

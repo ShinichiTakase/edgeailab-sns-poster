@@ -1,7 +1,5 @@
 const express = require("express");
 const crypto = require("crypto");
-const fs = require("fs");
-const path = require("path");
 const { savePlatformTokens, getConnectedEntry, deletePlatformTokensByUserId, findDuplicateOwner } = require("../lib/tokenStore");
 // state(OAuth) と同じ「短命トークン→データ」の仕組みを、アカウント切替確認の
 // 一時保管にもそのまま流用する（用途はPKCE専用ではなく汎用のTTL付きmapのため）。
@@ -18,36 +16,7 @@ const { requireSnsConnectionAvailable } = require("../middleware/snsConnectionGu
 
 const router = express.Router();
 
-// facebook.js と同様、json/ 配下（volumeマウントでコンテナ再ビルド後も残る）に
-// 標準出力とは別で永続化する。docker logsのローテーションで消える前の記録用。
-const LOG_FILE = path.join(__dirname, "..", "..", "json", "instagram.log");
-
-function writeLogFile(level, args) {
-  const message = args
-    .map((a) => (a instanceof Error ? a.stack : typeof a === "object" ? JSON.stringify(a) : a))
-    .join(" ");
-  const line = `${new Date().toISOString()} [${level}] ${message}\n`;
-  try {
-    fs.appendFileSync(LOG_FILE, line);
-  } catch (err) {
-    console.error("[instagram] failed to write log file:", err);
-  }
-}
-
-function logInfo(...args) {
-  console.info(...args);
-  writeLogFile("info", args);
-}
-
-function logWarn(...args) {
-  console.warn(...args);
-  writeLogFile("warn", args);
-}
-
-function logError(...args) {
-  console.error(...args);
-  writeLogFile("error", args);
-}
+const { logInfo, logWarn, logError } = require("../lib/logger").createLogger("instagram.log");
 
 function escapeHtml(text) {
   return String(text)

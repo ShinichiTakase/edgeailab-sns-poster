@@ -98,7 +98,7 @@ test("既存hashでlogin後、signup・password変更・resetにmigrationなし�
     assert.equal(response.status, 200, response.body);
     assert.equal((await request("/api/auth/login", { email: "unicode@example.test", password: "日本語Signup-2026!" })).status, 200);
   } finally {
-    if (server) await new Promise((resolve) => server.close(resolve));
+    if (server) { await new Promise((resolve) => { server.close(resolve); server.closeAllConnections?.(); }); }
     try { require("../data/dataSource").closeSqliteContext(); } catch {}
     fs.rmSync(dir, { recursive: true, force: true });
   }

@@ -1,3 +1,4 @@
+process.env.SNS_POSTER_DATA_SOURCE = "test-legacy";
 const assert = require("node:assert/strict");
 const test = require("node:test");
 

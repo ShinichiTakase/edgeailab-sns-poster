@@ -1,3 +1,4 @@
+process.env.SNS_POSTER_DATA_SOURCE = "test-legacy";
 // requireUnderTrialPostLimit（requireAuth.js）のリグレッションテスト。
 // 「投稿上限（60通）未満なら通す」「上限到達・支払い方法未登録なら403」
 // 「上限到達だが支払い方法登録済みなら、その場で自動アクティベートしてから通す」を
@@ -65,7 +66,7 @@ test.before(async () => {
 });
 
 test.after(async () => {
-  await new Promise((resolve) => server.close(resolve));
+  await new Promise((resolve) => { server.close(resolve); server.closeAllConnections?.(); });
 });
 
 function authedGet() {

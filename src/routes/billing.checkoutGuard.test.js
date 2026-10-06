@@ -1,3 +1,4 @@
+process.env.SNS_POSTER_DATA_SOURCE = "test-legacy";
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const express = require('express');
@@ -24,7 +25,7 @@ test.before(async()=>{
  server=http.createServer(app);await new Promise(r=>server.listen(0,'127.0.0.1',r));
  base=`http://127.0.0.1:${server.address().port}`;
 });
-test.after(()=>new Promise(r=>server.close(r)));
+test.after(()=>new Promise(r=>{server.close(r);server.closeAllConnections?.();}));
 test.beforeEach(()=>{
  checkoutCalls=0;events=[];
  customer={id:'cust_isolated',plan:['basic'],status:['trial'],users:[{userId:'u1',email:'test@example.com',role:['管理者'],sessionVersion:0}]};

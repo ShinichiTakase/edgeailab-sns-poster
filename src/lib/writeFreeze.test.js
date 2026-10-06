@@ -18,7 +18,7 @@ test("freeze blocks HTTP writes and OAuth GET while read-only API stays availabl
   const app=express(); app.use(writeFreezeMiddleware({env:{SNS_POSTER_WRITE_FREEZE_PATH:sentinel}})); app.get("/api/read",(_,res)=>res.json({ok:true})); app.post("/api/write",(_,res)=>res.json({ok:true})); app.get("/oauth/x/callback",(_,res)=>res.send("callback"));
   const server=await new Promise((resolve)=>{const s=app.listen(0,"127.0.0.1",()=>resolve(s));});
   try { assert.equal((await request(server,"GET","/api/read")).status,200); assert.equal((await request(server,"POST","/api/write","{}")).status,503); assert.equal((await request(server,"GET","/oauth/x/callback")).status,503); }
-  finally { await new Promise((resolve)=>server.close(resolve)); fs.rmSync(dir,{recursive:true,force:true}); }
+  finally { await new Promise((resolve)=>{server.close(resolve);server.closeAllConnections?.();}); fs.rmSync(dir,{recursive:true,force:true}); }
 });
 
 test("guarded batch runner refuses to spawn while frozen", () => {
@@ -39,5 +39,5 @@ test("Stripe webhook returns 503 without DB mutation during freeze, then retry i
     const {getSqliteContext,closeSqliteContext}=require("../data/dataSource"); let ctx=getSqliteContext(); assert.equal(ctx.db.prepare("SELECT status FROM customers WHERE id='c1'").get().status,"trial"); assert.equal(ctx.db.prepare("SELECT count(*) n FROM stripe_webhook_events").get().n,0);
     fs.unlinkSync(sentinel); assert.equal((await request(server,"POST","/api/billing/webhook",event)).status,200); assert.equal((await request(server,"POST","/api/billing/webhook",event)).status,200);
     assert.equal(ctx.db.prepare("SELECT status FROM customers WHERE id='c1'").get().status,"active"); assert.equal(ctx.db.prepare("SELECT count(*) n FROM stripe_webhook_events WHERE state='done'").get().n,1); closeSqliteContext();
-  } finally { await new Promise((resolve)=>server.close(resolve)); try{require("../data/dataSource").closeSqliteContext();}catch{} delete require.cache[stripePath]; fs.rmSync(dir,{recursive:true,force:true}); }
+  } finally { await new Promise((resolve)=>{server.close(resolve);server.closeAllConnections?.();}); try{require("../data/dataSource").closeSqliteContext();}catch{} delete require.cache[stripePath]; fs.rmSync(dir,{recursive:true,force:true}); }
 });

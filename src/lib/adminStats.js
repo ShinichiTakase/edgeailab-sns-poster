@@ -3,31 +3,26 @@
 // DateのgetFullYear/getMonthをそのまま使う）。顧客ごとのStripe請求サイクル
 // （billingCycle.jsのgetCurrentBillingCycle）とは異なる区切りである点に注意。
 //
-// 表示データはすべて事前計算済みのJSONキャッシュから読む（2026-09-05、ユーザー要望で
+// 表示データはすべて事前計算済みのSQLiteキャッシュから読む（2026-09-05、ユーザー要望で
 // 「今月分もリアルタイム表示は不要」となり、リクエスト時の都度計算を全廃した）。
 // getAdminStatsはHTTPリクエストの都度、全顧客横断の計算（Stripe API呼び出し含む）を
 // 一切行わない。実際の計算は2本のバッチスクリプトが担う:
-//   - src/scripts/adminStatsMonthlyBatch.js（月初1回）→ json/admin_stats_last_month.json
+//   - src/scripts/adminStatsMonthlyBatch.js（月初1回）→ admin_stats_cache(last_month)
 //     前月分は月が変わった後は絶対に値が変わらない確定データなので月1回で十分。
 //   - src/scripts/adminStatsDailyBatch.js（毎日4時、トラフィックの少ない時間帯）
-//     → json/admin_stats_this_month.json
+//     → admin_stats_cache(this_month)
 //     今月分・現在の利用者数は生きた値だが、リアルタイム表示は不要という前提のため、
 //     日次バッチの計算結果（＝最大1日遅れ）で足りる。
 // キャッシュが無い・対象月がズレている（バッチ未実行/失敗）場合のみ、安全側
 // フォールバックとしてgetAdminStats内でその場計算する（表示を壊さないための保険。
 // 通常運用では発生しない想定）。
-const fs = require("fs");
-const path = require("path");
+const { getSqliteContext } = require("../data/dataSource");
 const { listAllCustomers, isCanceled } = require("./customerStore");
 const { getActualPostCounts } = require("./postingLogStore");
 const { pricesForPlan, planKey } = require("./stripePricing");
 const { computePriceAmount } = require("./stripeTierPricing");
 
 const PLATFORMS = ["x", "threads", "facebook", "instagram", "linkedin"];
-const CACHE_DIR = path.join(__dirname, "..", "..", "json");
-const LAST_MONTH_CACHE_PATH = path.join(CACHE_DIR, "admin_stats_last_month.json");
-const THIS_MONTH_CACHE_PATH = path.join(CACHE_DIR, "admin_stats_this_month.json");
-
 function emptyPlatformCounts() {
   return { x: 0, threads: 0, facebook: 0, instagram: 0, linkedin: 0 };
 }
@@ -43,20 +38,25 @@ function monthKey(date) {
   return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}`;
 }
 
-function readCache(cachePath) {
-  if (!fs.existsSync(cachePath)) return null;
+function readCache(statsType) {
   try {
-    const raw = fs.readFileSync(cachePath, "utf-8");
-    if (!raw.trim()) return null;
-    return JSON.parse(raw);
+    const row = getSqliteContext().db.prepare(
+      "SELECT payload_json FROM admin_stats_cache WHERE stats_type = ?"
+    ).get(statsType);
+    return row ? JSON.parse(row.payload_json) : null;
   } catch (err) {
-    console.error(`[adminStats] failed to read cache ${cachePath}, falling back to live calculation:`, err);
+    console.error(`[adminStats] failed to read SQLite cache ${statsType}, falling back to live calculation:`, err);
     return null;
   }
 }
 
-function writeCache(cachePath, data) {
-  fs.writeFileSync(cachePath, JSON.stringify(data, null, 2) + "\n", "utf-8");
+function writeCache(statsType, data) {
+  const { db } = getSqliteContext();
+  const timestamp = new Date().toISOString();
+  db.prepare(`INSERT INTO admin_stats_cache(stats_type,period,payload_json,calculated_at,updated_at)
+    VALUES(?,?,?,?,?) ON CONFLICT(stats_type) DO UPDATE SET period=excluded.period,
+    payload_json=excluded.payload_json,calculated_at=excluded.calculated_at,updated_at=excluded.updated_at`)
+    .run(statsType, data.month, JSON.stringify(data), data.generatedAt, timestamp);
 }
 
 // 前月中にcanceledAtが記録された顧客数。
@@ -192,7 +192,7 @@ async function buildThisMonthSnapshot(customers, stripe, now) {
 async function computeAndCacheLastMonthStats(stripe, now = new Date()) {
   const customers = await listAllCustomers();
   const snapshot = await buildLastMonthSnapshot(customers, stripe, now);
-  writeCache(LAST_MONTH_CACHE_PATH, snapshot);
+  writeCache("last_month", snapshot);
   return snapshot;
 }
 
@@ -200,7 +200,7 @@ async function computeAndCacheLastMonthStats(stripe, now = new Date()) {
 async function computeAndCacheThisMonthStats(stripe, now = new Date()) {
   const customers = await listAllCustomers();
   const snapshot = await buildThisMonthSnapshot(customers, stripe, now);
-  writeCache(THIS_MONTH_CACHE_PATH, snapshot);
+  writeCache("this_month", snapshot);
   return snapshot;
 }
 
@@ -212,8 +212,8 @@ async function getAdminStats(stripe) {
   const expectedThisMonthKey = monthKey(monthRange(now, 0).start);
   const expectedLastMonthKey = monthKey(monthRange(now, -1).start);
 
-  let lastMonthSnapshot = readCache(LAST_MONTH_CACHE_PATH);
-  let thisMonthSnapshot = readCache(THIS_MONTH_CACHE_PATH);
+  let lastMonthSnapshot = readCache("last_month");
+  let thisMonthSnapshot = readCache("this_month");
 
   // フォールバックが必要な場合のみ顧客一覧を取得する（通常運用では一切呼ばれない）。
   let customersPromise = null;
@@ -268,4 +268,5 @@ function buildRevenueView(revenue) {
   };
 }
 
-module.exports = { getAdminStats, computeAndCacheLastMonthStats, computeAndCacheThisMonthStats };
+module.exports = { getAdminStats, computeAndCacheLastMonthStats, computeAndCacheThisMonthStats,
+  _cache: { readCache, writeCache } };

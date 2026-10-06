@@ -1,3 +1,4 @@
+process.env.SNS_POSTER_DATA_SOURCE = "test-legacy";
 // customerStore.crossedTrialPostLimitWarning / crossedTrialPostLimit のリグレッションテスト。
 // トライアル投稿上限（60通）の80%（48通）、および60通そのものを「今回の加算で
 // 初めて跨いだか」を正しく判定できるかを検証する（純粋関数のためモック不要）。

@@ -1,11 +1,14 @@
-// facebook.js/instagram.js ルートで使っているファイル永続化ログ（json/配下、
+// facebook.js/instagram.js ルートで使っているファイル永続化ログ（logs/配下、
 // docker logsのローテーションで消える前の記録用）を、単発実行スクリプトからも
 // 使えるように切り出したもの。
 const fs = require("fs");
 const path = require("path");
 
 function createLogger(logFileName) {
-  const LOG_FILE = path.join(process.env.SNS_POSTER_LOG_DIR || path.join(__dirname, "..", "..", "json"), logFileName);
+  if (path.basename(logFileName) !== logFileName) throw new Error("log file name must not contain a path");
+  const logDirectory = process.env.SNS_POSTER_LOG_DIR || path.join(__dirname, "..", "..", "logs");
+  fs.mkdirSync(logDirectory, { recursive: true, mode: 0o750 });
+  const LOG_FILE = path.join(logDirectory, logFileName);
 
   function writeLogFile(level, args) {
     const message = args

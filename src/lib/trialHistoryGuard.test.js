@@ -1,3 +1,4 @@
+process.env.SNS_POSTER_DATA_SOURCE = "test-legacy";
 // trialHistoryGuard.checkTrialHistoryHit の判定ロジック（適用条件のゲート）のテスト。
 // SNS連携履歴によるトライアル濫用防止（2026-09-01追加）の中核判定。
 // customerStore・snsConnectionModeConfig・snsHistoryStoreをフェイクに差し替える。

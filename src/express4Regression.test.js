@@ -21,7 +21,7 @@ test.before(async () => {
   port = server.address().port;
 });
 
-test.after(async () => new Promise((resolve) => server.close(resolve)));
+test.after(async () => { await new Promise((resolve) => { server.close(resolve); server.closeAllConnections?.(); }); });
 
 function request(method, route, body, contentType) {
   const payload = body == null ? null : Buffer.from(body);

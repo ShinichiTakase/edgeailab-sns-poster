@@ -1,67 +1,71 @@
-// json/client_tokens.json（SNSトークン置き場、暫定のファイルベース実装）は、
-// customersレコードの削除・状態変更と連動する仕組みを持たない。正規の解約導線
-// （POST /api/account/cancel）はトークンも道連れに削除するが、microCMS管理画面から
-// customersレコードを直接削除した場合はこのファイルにトークンだけが取り残され、
-// 実在しない顧客のslug（実体はreq.customer.id。allowedSlugsと同じ注意点があるので
-// docs/内部仕様_SNS連携.md参照）がfindDuplicateOwnerの重複判定に居座り続けて、
-// 同じSNSアカウントを正しい持ち主が再連携しようとしてもduplicate_accountで
-// ブロックされてしまう（2026-08-26、info@108teaworks.com/id: k22n7qwhimxで実機発生）。
-//
-// このcronは他のsrc/scripts/*.jsと同じ単発実行スクリプトで、cronから
-// `docker compose run --rm sns-poster-orphan-sns-token-check` で日次起動する想定
-// （実際のcrontab登録は手動実施。CLAUDE.md参照）。client_tokens.jsonの全キーについて
-// customersレコードが実在するかmicroCMSに問い合わせ、存在しないキーが見つかったら
-// ログに記録した上でメール通知する（自動削除はしない。誤検知時に実データを失うのを
-// 避けるため、判断と削除は人間が行う）。
+// SQLite-only SNS account integrity audit. Legacy JSON is migration evidence only and is
+// deliberately not imported or read by this runtime job.
 const path = require("path");
 require("dotenv").config({ path: path.join(__dirname, "..", "..", ".env") });
 
-const { loadStore } = require("../lib/tokenStore");
-const { getCustomerById } = require("../lib/customerStore");
+const { getSqliteContext } = require("../data/dataSource");
+const { decryptSecret } = require("../security/tokenCrypto");
 const { notifyFailure } = require("../lib/mailer");
-const { logInfo, logError } = require("../lib/logger").createLogger("orphan-sns-token-check.log");
 
-async function main() {
-  const store = loadStore();
-  const slugs = Object.keys(store);
-  logInfo(`[orphan-sns-token-check] ${slugs.length} slug(s) to check`);
+function auditSocialAccounts({ db, keyring }) {
+  const issues = [];
+  const accounts = db.prepare(`SELECT sa.id,sa.customer_id,sa.platform,sa.external_account_id,
+    sa.access_token_ciphertext,sa.refresh_token_ciphertext,sa.token_expires_at,sa.disconnected_at,
+    c.id AS owner_id,c.status AS customer_status
+    FROM social_accounts sa LEFT JOIN customers c ON c.id=sa.customer_id ORDER BY sa.id`).all();
 
-  const orphans = [];
-  for (const slug of slugs) {
+  for (const account of accounts) {
+    if (!account.owner_id) issues.push({ accountId: account.id, platform: account.platform, reason: "customer_missing" });
+    if (!account.disconnected_at && account.customer_status === "canceled") {
+      issues.push({ accountId: account.id, platform: account.platform, reason: "active_account_for_canceled_customer" });
+    }
+    if (account.token_expires_at && !Number.isFinite(Date.parse(account.token_expires_at))) {
+      issues.push({ accountId: account.id, platform: account.platform, reason: "invalid_token_expiry" });
+    }
+    if (account.disconnected_at) continue;
+    const context = `${account.platform}:${account.external_account_id}`;
     try {
-      const customer = await getCustomerById(slug);
-      if (!customer) {
-        const platforms = Object.keys(store[slug]);
-        orphans.push({ slug, platforms });
-        logError(`[orphan-sns-token-check] orphaned slug=${slug} platforms=${platforms.join(",")}`);
-      }
-    } catch (err) {
-      logError(`[orphan-sns-token-check] lookup failed slug=${slug}:`, err);
+      if (account.access_token_ciphertext) decryptSecret(account.access_token_ciphertext, keyring, `${context}:access`);
+      if (account.refresh_token_ciphertext) decryptSecret(account.refresh_token_ciphertext, keyring, `${context}:refresh`);
+    } catch {
+      issues.push({ accountId: account.id, platform: account.platform, reason: "token_decryption_failed" });
     }
   }
 
-  if (orphans.length > 0) {
-    const lines = orphans.map((o) => `- slug=${o.slug} platforms=${o.platforms.join(",")}`);
-    await notifyFailure(
-      "[edgeailab] 孤児化したSNS連携トークンを検知",
-      [
-        "json/client_tokens.jsonに、対応するcustomersレコードが存在しないキーが見つかりました。",
-        "microCMS管理画面から顧客レコードを直接削除した場合にこの状態になります"
-        + "（正規の解約導線ならトークンも連動して削除されるため発生しません）。",
-        "",
-        ...lines,
-        "",
-        "このまま放置すると、同じSNSアカウントを正しい持ち主が再連携しようとした際に",
-        "duplicate_accountとして誤ってブロックされます。json/client_tokens.jsonから",
-        "該当キーを削除するか、正しい顧客のslug（req.customer.id）にリネームしてください。",
-      ].join("\n")
-    ).catch((err) => logError("[orphan-sns-token-check] notifyFailure failed:", err));
+  const duplicates = db.prepare(`SELECT platform,external_account_id,count(*) AS count
+    FROM social_accounts WHERE disconnected_at IS NULL GROUP BY platform,external_account_id HAVING count(*)>1`).all();
+  for (const duplicate of duplicates) {
+    issues.push({ platform: duplicate.platform, reason: "duplicate_external_account", count: duplicate.count });
   }
-
-  logInfo(`[orphan-sns-token-check] done. orphans=${orphans.length} checked=${slugs.length}`);
+  return { checked: accounts.length, issues };
 }
 
-main().catch((err) => {
-  logError("[orphan-sns-token-check] fatal error:", err);
-  process.exit(1);
-});
+async function main({ notify = !process.argv.includes("--no-notify"), logger } = {}) {
+  const activeLogger = logger || require("../lib/logger").createLogger("orphan-sns-token-check.log");
+  const result = auditSocialAccounts(getSqliteContext());
+  if (result.issues.length > 0) {
+    const lines = result.issues.map((issue) =>
+      `- account_id=${issue.accountId || "n/a"} platform=${issue.platform} reason=${issue.reason}`
+    );
+    activeLogger.logError(`[orphan-sns-token-check] SQLite integrity issue(s)=${result.issues.length}`);
+    if (notify) {
+      await notifyFailure(
+        "[edgeailab] SQLite SNS連携データの整合性問題を検知",
+        ["SQLite social_accountsの整合性監査で問題を検知しました。", "", ...lines,
+          "", "自動修正は行っていません。SQLiteの関連レコードと運用ログを確認してください。"].join("\n")
+      );
+    }
+  }
+  activeLogger.logInfo(`[orphan-sns-token-check] done. issues=${result.issues.length} checked=${result.checked}`);
+  return result;
+}
+
+if (require.main === module) {
+  main().catch((err) => {
+    const { logError } = require("../lib/logger").createLogger("orphan-sns-token-check.log");
+    logError("[orphan-sns-token-check] fatal error:", err);
+    process.exit(1);
+  });
+}
+
+module.exports = { auditSocialAccounts, main };

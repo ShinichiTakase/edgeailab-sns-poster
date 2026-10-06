@@ -35,3 +35,12 @@ OAuth token/state/payloadはAES-256-GCMで暗号化し、鍵versionだけをDB�
 ## Backup / restore
 
 WALファイルの単純copyは禁止し、SQLite Online Backup APIを使う。backup manifestのSHA-256と `PRAGMA integrity_check` を検証する。restoreは既存DBを上書きせず新規パスへ復元し、検証後に運用手順で切り替える。詳細は `SQLite運用手順.md`。
+
+## Phase 5: SQLite-only runtime（2026-10-07）
+
+- Production runtimeは `SNS_POSTER_DATA_SOURCE=sqlite` の明示を必須とする。未設定、空文字、未知値、`microcms` は起動エラーであり、暗黙fallbackは行わない。
+- API、OAuth、認証、課金、scheduler、retry、materializer、全batchの構造化業務データはSQLiteだけを参照・更新する。
+- microCMS client、export/import、reverse writerはmigration・rollback用ツールとしてのみ保持し、通常runtimeからは選択できない。
+- legacy `json/` は移行証跡・rollback archiveとして保持する。通常runtimeの業務データ参照・更新には使用しない。
+- 管理統計cacheは `admin_stats_cache` に保存する。一般runtime logは `/app/logs` に保存し、SQLite `audit_logs` は業務監査用途として区別する。
+- SNS連携整合性の日次監査はSQLiteの `customers` / `social_accounts` と暗号化tokenの復号可能性を検査する。外部SNS APIおよびlegacy token JSONは参照しない。
