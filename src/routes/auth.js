@@ -11,6 +11,7 @@ const { getStripe } = require("../lib/stripeClient");
 const { planKey } = require("../lib/stripePricing");
 const { isKnownTestSlug } = require("../lib/snsConnectionModeConfig");
 const { hasUnread: hasUnreadAnnouncements } = require("../lib/announcementStore");
+const { isValidEmail } = require("../lib/inputValidation");
 
 const router = express.Router();
 
@@ -50,10 +51,6 @@ const PASSWORD_RESET_MIN_INTERVAL_MS = 3 * 60 * 1000;
 
 const lastResendAt = new Map();
 const lastPasswordResetRequestAt = new Map();
-
-function isValidEmail(email) {
-  return typeof email === "string" && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim());
-}
 
 // 半角英字・数字・記号をすべて含む8文字以上
 function isValidPassword(password) {

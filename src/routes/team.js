@@ -1,4 +1,5 @@
 const express = require("express");
+const { isValidEmail } = require("../lib/inputValidation");
 const crypto = require("crypto");
 const bcrypt = require("bcrypt");
 const customerStore = require("../lib/customerStore");
@@ -14,10 +15,6 @@ const router = express.Router();
 const VALID_ROLES = ["管理者", "承認者", "編集者", "閲覧者"];
 const INVITATION_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 const BCRYPT_ROUNDS = 12;
-
-function isValidEmail(email) {
-  return typeof email === "string" && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim());
-}
 
 // 半角英字・数字・記号をすべて含む8文字以上（signup同様の要件）
 function isValidPassword(password) {

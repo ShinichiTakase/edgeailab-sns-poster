@@ -6,7 +6,7 @@ const { requireAuth, blockExpiredTrialJson, blockViewerRole, blockApproverRole }
 
 const router = express.Router();
 
-const UPLOAD_DIR = path.join(__dirname, "..", "..", "uploads");
+const UPLOAD_DIR = process.env.SNS_POSTER_UPLOAD_DIR || path.join(__dirname, "..", "..", "uploads");
 const MAX_SIZE = 8 * 1024 * 1024;
 const ALLOWED_MIME = ["image/jpeg", "image/png", "image/webp"];
 const EXT_BY_MIME = { "image/jpeg": ".jpg", "image/png": ".png", "image/webp": ".webp" };
