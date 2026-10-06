@@ -14,8 +14,9 @@ function createScheduledPostJobRepository(db, { now = () => new Date().toISOStri
         WHERE scheduled_post_id = (
           SELECT j.scheduled_post_id FROM scheduled_post_jobs j
           JOIN scheduled_posts p ON p.id=j.scheduled_post_id
-          WHERE j.state IN ('pending','failed')
-            AND (j.next_attempt_at IS NULL OR j.next_attempt_at <= @dueAt)
+          WHERE (j.state='pending' OR (
+              j.state='failed' AND j.next_attempt_at IS NOT NULL AND j.next_attempt_at <= @dueAt
+            ))
             AND p.scheduled_at <= @dueAt AND p.lifecycle_state='scheduled'
             AND p.approval_state IN ('none','approved')
           ORDER BY p.scheduled_at, j.scheduled_post_id LIMIT 1

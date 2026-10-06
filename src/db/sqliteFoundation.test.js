@@ -131,6 +131,19 @@ test("two independent connections can claim a due job only once", () => {
   } finally { second.close(); f.close(); }
 });
 
+test("failed jobs require a non-null due retry timestamp before claim", () => {
+  const f = fixture();
+  try {
+    seedIdentity(f.db);
+    const repos = createRepositories(f.db, { now: () => NOW, uuid: () => "retry-attempt" });
+    addPost(repos);
+    f.db.prepare("UPDATE scheduled_post_jobs SET state='failed',next_attempt_at=NULL WHERE scheduled_post_id='p1'").run();
+    assert.equal(repos.jobs.claimNext({ workerId: "worker", leaseExpiresAt: LATER, dueAt: NOW }), null);
+    f.db.prepare("UPDATE scheduled_post_jobs SET next_attempt_at=? WHERE scheduled_post_id='p1'").run(NOW);
+    assert.equal(repos.jobs.claimNext({ workerId: "worker", leaseExpiresAt: LATER, dueAt: NOW }).scheduled_post_id, "p1");
+  } finally { f.close(); }
+});
+
 test("simultaneous worker threads produce one claim", async () => {
   const f = fixture();
   try {

@@ -116,9 +116,11 @@ function createShadowImporter(db, { keyring, now = () => new Date().toISOString(
           userIds.has(p.created_by)?p.created_by:null,nullable(p.created_by),validSourceSchedule,nullable(p.source_schedule_id),choice(p.platform),p.content||"",p.scheduled_at,
           bool(p.contains_url),nullable(p.image_url),nullable(p.video_url),nullable(p.facebook_page_id),p.notify_email == null ? null : bool(p.notify_email),"scheduled",
           nullable(p.batch_id),approval,nullable(p.appr_requested_at),nullable(p.appr_expires_at),p.createdAt,p.updatedAt);
-        db.prepare(`INSERT INTO scheduled_post_jobs(scheduled_post_id,execution_key,state,attempt_count,next_attempt_at,created_at,updated_at,completed_at)
-          VALUES (?,?,?,?,?,?,?,?)`).run(p.id,`scheduled-post:${p.id}`,status,retryInfo?1+Number(retryInfo.retryCount||0):0,
-          retryInfo?nullable(retryInfo.nextRetryAt):null,p.createdAt,p.updatedAt,status==="done"?p.updatedAt:null);
+        const retryExhausted=status==="failed"&&retryInfo&&Number(retryInfo.retryCount||0)>=3&&!retryInfo.nextRetryAt;
+        db.prepare(`INSERT INTO scheduled_post_jobs(scheduled_post_id,execution_key,state,attempt_count,next_attempt_at,last_error_code,created_at,updated_at,completed_at)
+          VALUES (?,?,?,?,?,?,?,?,?)`).run(p.id,`scheduled-post:${p.id}`,status,retryInfo?1+Number(retryInfo.retryCount||0):0,
+          retryInfo?nullable(retryInfo.nextRetryAt):null,retryExhausted?"legacy_retry_exhausted":null,
+          p.createdAt,p.updatedAt,status==="done"?p.updatedAt:null);
         importApprovals("scheduled_post_approvals","scheduled_post_id",p,p.id);
       }
 
