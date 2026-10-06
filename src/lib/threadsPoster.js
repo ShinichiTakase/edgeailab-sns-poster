@@ -5,22 +5,27 @@ const GRAPH_URL = "https://graph.threads.net/v1.0";
 // コンテナ作成→公開の2段階API。
 // 画像は受け取らない（Instagram専用の画像をここで添付すると、本文中のURLに
 // 対するog:imageリンクプレビューが出なくなるため。posts.js参照）。
-async function postText({ userId, accessToken }, text) {
+async function postText({ userId, accessToken }, text, { existingContainerId = null, onContainerCreated } = {}) {
   const createParams = new URLSearchParams({ access_token: accessToken, text, media_type: "TEXT" });
 
-  const createRes = await fetch(`${GRAPH_URL}/${userId}/threads?${createParams}`, { method: "POST" });
-  const createJson = await createRes.json();
-  if (!createRes.ok || createJson.error || !createJson.id) {
-    throw new Error(`threads container create failed: ${JSON.stringify(createJson)}`);
+  let containerId = existingContainerId;
+  if (!containerId) {
+    const createRes = await fetch(`${GRAPH_URL}/${userId}/threads?${createParams}`, { method: "POST" });
+    const createJson = await createRes.json();
+    if (!createRes.ok || createJson.error || !createJson.id) {
+      throw new Error(`threads container create failed: ${JSON.stringify(createJson)}`);
+    }
+    containerId = createJson.id;
+    if (onContainerCreated) await onContainerCreated(containerId);
   }
 
-  const publishParams = new URLSearchParams({ creation_id: createJson.id, access_token: accessToken });
+  const publishParams = new URLSearchParams({ creation_id: containerId, access_token: accessToken });
   const publishRes = await fetch(`${GRAPH_URL}/${userId}/threads_publish?${publishParams}`, { method: "POST" });
   const publishJson = await publishRes.json();
   if (!publishRes.ok || publishJson.error || !publishJson.id) {
     throw new Error(`threads publish failed: ${JSON.stringify(publishJson)}`);
   }
-  return { id: publishJson.id };
+  return { id: publishJson.id, containerId };
 }
 
 module.exports = { postText };

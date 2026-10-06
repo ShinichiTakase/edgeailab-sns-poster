@@ -50,12 +50,13 @@ async function waitForContainerReady(
 
 // Instagram Graph APIの仕様上テキストのみの投稿はできないため、imageUrl必須。
 // メディアコンテナ作成→(処理完了待ち)→公開の3段階。
-async function postImage({ igUserId, accessToken }, text, imageUrl) {
+async function postImage({ igUserId, accessToken }, text, imageUrl, { existingContainerId = null, onContainerCreated } = {}) {
   if (!imageUrl) {
     throw new Error("image_required");
   }
 
-  const createRes = await fetch(`${GRAPH_URL}/${igUserId}/media`, {
+  let containerId = existingContainerId;
+  if (!containerId) { const createRes = await fetch(`${GRAPH_URL}/${igUserId}/media`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ image_url: imageUrl, caption: text, access_token: accessToken }),
@@ -65,28 +66,33 @@ async function postImage({ igUserId, accessToken }, text, imageUrl) {
     throw new Error(`instagram media create failed: ${JSON.stringify(createJson)}`);
   }
 
-  await waitForContainerReady(createJson.id, accessToken);
+  containerId = createJson.id;
+  if (onContainerCreated) await onContainerCreated(containerId);
+  }
+
+  await waitForContainerReady(containerId, accessToken);
 
   const publishRes = await fetch(`${GRAPH_URL}/${igUserId}/media_publish`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ creation_id: createJson.id, access_token: accessToken }),
+    body: JSON.stringify({ creation_id: containerId, access_token: accessToken }),
   });
   const publishJson = await publishRes.json();
   if (!publishRes.ok || publishJson.error || !publishJson.id) {
     throw new Error(`instagram publish failed: ${JSON.stringify(publishJson)}`);
   }
-  return { id: publishJson.id };
+  return { id: publishJson.id, containerId };
 }
 
 // Instagramリール（動画）投稿。media_type: "REELS"でコンテナ作成→処理完了待ち→公開の3段階。
 // 画像と異なりMeta側の動画エンコード処理に数十秒〜数分かかりうるため、専用のポーリング設定を使う。
-async function postReel({ igUserId, accessToken }, text, videoUrl) {
+async function postReel({ igUserId, accessToken }, text, videoUrl, { existingContainerId = null, onContainerCreated } = {}) {
   if (!videoUrl) {
     throw new Error("video_required");
   }
 
-  const createRes = await fetch(`${GRAPH_URL}/${igUserId}/media`, {
+  let containerId = existingContainerId;
+  if (!containerId) { const createRes = await fetch(`${GRAPH_URL}/${igUserId}/media`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
@@ -105,7 +111,11 @@ async function postReel({ igUserId, accessToken }, text, videoUrl) {
     throw new Error(`instagram reel media create failed: ${JSON.stringify(createJson)}`);
   }
 
-  await waitForContainerReady(createJson.id, accessToken, {
+  containerId = createJson.id;
+  if (onContainerCreated) await onContainerCreated(containerId);
+  }
+
+  await waitForContainerReady(containerId, accessToken, {
     intervalMs: VIDEO_CONTAINER_POLL_INTERVAL_MS,
     maxAttempts: VIDEO_CONTAINER_POLL_MAX_ATTEMPTS,
   });
@@ -113,13 +123,13 @@ async function postReel({ igUserId, accessToken }, text, videoUrl) {
   const publishRes = await fetch(`${GRAPH_URL}/${igUserId}/media_publish`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ creation_id: createJson.id, access_token: accessToken }),
+    body: JSON.stringify({ creation_id: containerId, access_token: accessToken }),
   });
   const publishJson = await publishRes.json();
   if (!publishRes.ok || publishJson.error || !publishJson.id) {
     throw new Error(`instagram reel publish failed: ${JSON.stringify(publishJson)}`);
   }
-  return { id: publishJson.id };
+  return { id: publishJson.id, containerId };
 }
 
 module.exports = { postImage, postReel };

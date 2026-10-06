@@ -10,6 +10,7 @@ const {
   getCustomerById,
   isTrialPostLimitReached,
   isCanceled,
+  requiresPaymentRegistration,
   bumpTrialPostCount,
   getTrialPostCount,
   crossedTrialPostLimitWarning,
@@ -36,14 +37,14 @@ function platformKeyFromLabel(value) {
 // posts.jsのpostToPlatformと同じ方針：imageUrl/videoUrlはInstagramにのみ渡す
 // （Facebook/Threadsに渡すと写真投稿扱いになりog:imageリンクプレビューが出なくなるため）。
 // Instagramはvideo_urlがあればリール投稿、なければ従来通り画像投稿にフォールバックする。
-async function postToPlatform(platform, entry, text, imageUrl, videoUrl, facebookPageId, logger) {
+async function postToPlatform(platform, entry, text, imageUrl, videoUrl, facebookPageId, logger, lifecycle = {}) {
   if (platform === "x") {
     return xPoster.postTextWithLinkImage(entry.access_token, text, extractFirstUrl(text), (err) => {
       logger.logError(`[scheduledPostExecutor] x link image attach failed:`, err);
     });
   }
   if (platform === "threads") {
-    return threadsPoster.postText({ userId: entry.user_id, accessToken: entry.access_token }, text);
+    return threadsPoster.postText({ userId: entry.user_id, accessToken: entry.access_token }, text, lifecycle);
   }
   if (platform === "linkedin") {
     return linkedinPoster.postText({ personUrn: entry.user_id, accessToken: entry.access_token }, text, extractFirstUrl(text));
@@ -56,8 +57,8 @@ async function postToPlatform(platform, entry, text, imageUrl, videoUrl, faceboo
   }
   if (platform === "instagram") {
     const igEntry = { igUserId: entry.user_id, accessToken: entry.access_token };
-    if (videoUrl) return instagramPoster.postReel(igEntry, text, videoUrl);
-    return instagramPoster.postImage(igEntry, text, imageUrl);
+    if (videoUrl) return instagramPoster.postReel(igEntry, text, videoUrl, lifecycle);
+    return instagramPoster.postImage(igEntry, text, imageUrl, lifecycle);
   }
   throw new Error(`unknown_platform:${platform}`);
 }
@@ -86,17 +87,27 @@ async function attemptScheduledPost(post, customerCache, logger) {
   // ワンショット投稿（posts.js）と同じガード。cronはHTTPリクエストの文脈を持たないため、
   // requireAuth.jsのミドルウェアではなくcustomerStore.jsの純粋関数を直接呼ぶ。
   if (isCanceled(customer)) throw new Error("account_canceled");
+  let activatedAfterLimit = false;
   if (isTrialPostLimitReached(customer)) {
     // requireUnderTrialPostLimit（requireAuth.js）と同じ救済経路（2026-08-25追加）。
     // 60通到達後にpayment.htmlでカードだけ登録しておいた顧客が、次にこのcronが
     // 実行されたタイミングで自動的に本契約へ切り替わり投稿が再開されるようにする。
     const result = await activateAfterTrialLimitIfNeeded({ customer, logger });
     if (result === "activated") {
+      activatedAfterLimit = true;
       customer.status = ["active"];
+      // DBには契約IDが保存済み。次の予約は更新後の顧客を読み直す。
+      customerCache.delete(customerCode);
       await sendTrialPostLimitReachedEmailIfNeeded({ customer, result, logger });
     } else {
       throw new Error("trial_post_limit_reached");
     }
+  }
+
+  // 予約作成後に期限切れになった場合も、実送信直前に未払いを再確認する。
+  // 上限到達からこの呼び出し内で本契約化した場合は、DB更新成功が確認済み。
+  if (!activatedAfterLimit && requiresPaymentRegistration(customer)) {
+    throw new Error("payment_required");
   }
 
   const tokenEntry = (loadStore()[customerCode] || {})[platform];
@@ -148,6 +159,7 @@ async function attemptScheduledPost(post, customerCache, logger) {
         // も更新しておく（同一cron実行内の後続処理がstatus:"trial"のまま誤判定しないため）。
         if (result === "activated") {
           customer.status = ["active"];
+          customerCache.delete(customerCode);
         }
         await sendTrialPostLimitReachedEmailIfNeeded({ customer, result, logger });
       }
@@ -212,4 +224,4 @@ async function attemptScheduledPost(post, customerCache, logger) {
   return { platform, customerCode };
 }
 
-module.exports = { attemptScheduledPost, platformKeyFromLabel };
+module.exports = { attemptScheduledPost, postToPlatform, platformKeyFromLabel };

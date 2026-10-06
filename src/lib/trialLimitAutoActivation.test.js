@@ -16,6 +16,8 @@ let fakeCards = [];
 let createdSubscriptions = [];
 let subscriptionStatusToReturn = "active";
 let subscriptionCreateShouldThrow = false;
+let existingSubscriptions = [];
+let subscriptionCreateOptions = [];
 
 stripeClient.getStripe = () => ({
   paymentMethods: {
@@ -25,10 +27,12 @@ stripeClient.getStripe = () => ({
     create: async () => ({ id: "cus_new" }),
   },
   subscriptions: {
-    create: async (params) => {
+    list: async () => ({ data: existingSubscriptions }),
+    create: async (params, options) => {
       if (subscriptionCreateShouldThrow) throw new Error("stripe_down");
       createdSubscriptions.push(params);
-      return { id: "sub_new", status: subscriptionStatusToReturn };
+      subscriptionCreateOptions.push(options);
+      return { id: "sub_new", status: subscriptionStatusToReturn, metadata: params.metadata };
     },
   },
 });
@@ -63,6 +67,8 @@ test.beforeEach(() => {
   sentMails = [];
   subscriptionStatusToReturn = "active";
   subscriptionCreateShouldThrow = false;
+  existingSubscriptions = [];
+  subscriptionCreateOptions = [];
 });
 
 function fakeLogger() {
@@ -92,6 +98,8 @@ test("支払い方法登録済み: サブスクリプションを即時作成し
     createdSubscriptions[0].items.map((i) => i.price),
     ["price_base", "price_metered", "price_metered_x"]
   );
+  assert.equal(createdSubscriptions[0].metadata.edgeailab_trial_activation_key, "trial-limit:cust_1");
+  assert.equal(subscriptionCreateOptions[0].idempotencyKey, "trial-limit:cust_1");
 
   assert.equal(updatedCustomers.length, 1);
   assert.equal(updatedCustomers[0].id, "cust_1");
@@ -117,6 +125,35 @@ test("Stripe呼び出し自体が例外を投げた場合もfailedを返し、�
   const result = await activateAfterTrialLimitIfNeeded({ customer, logger: fakeLogger() });
 
   assert.equal(result, "failed");
+  assert.equal(updatedCustomers.length, 0);
+});
+
+test("Stripe作成成功後にDB保存だけ失敗しても、再試行は既存subscriptionを再利用する", async () => {
+  fakeCards = [{ id: "pm_1" }];
+  existingSubscriptions = [{
+    id: "sub_created_before_crash",
+    status: "active",
+    metadata: { edgeailab_trial_activation_key: "trial-limit:cust_1" },
+  }];
+  const customer = { id: "cust_1", stripeCustomerId: "cus_1", plan: ["Standard"] };
+
+  assert.equal(await activateAfterTrialLimitIfNeeded({ customer, logger: fakeLogger() }), "activated");
+  assert.equal(createdSubscriptions.length, 0);
+  assert.equal(updatedCustomers.length, 1);
+  assert.equal(updatedCustomers[0].patch.stripeSubscriptionId, "sub_created_before_crash");
+});
+
+test("同じ業務キーの既存subscriptionがincompleteなら新規契約を重ねない", async () => {
+  fakeCards = [{ id: "pm_1" }];
+  existingSubscriptions = [{
+    id: "sub_incomplete_before_crash",
+    status: "incomplete",
+    metadata: { edgeailab_trial_activation_key: "trial-limit:cust_1" },
+  }];
+  const customer = { id: "cust_1", stripeCustomerId: "cus_1", plan: ["Standard"] };
+
+  assert.equal(await activateAfterTrialLimitIfNeeded({ customer, logger: fakeLogger() }), "failed");
+  assert.equal(createdSubscriptions.length, 0);
   assert.equal(updatedCustomers.length, 0);
 });
 
@@ -148,4 +185,18 @@ test("sendTrialPostLimitReachedEmailIfNeeded: failed時は送信しない", asyn
 
   assert.equal(sent, false);
   assert.equal(sentMails.length, 0);
+});
+
+test("自動本契約化もCheckoutと同じ設定済み税率を新規契約へ渡す", async () => {
+  const previous = process.env.STRIPE_TAX_RATE_ID;
+  process.env.STRIPE_TAX_RATE_ID = "txr_isolated_audit";
+  try {
+    fakeCards = [{ id: "pm_1" }];
+    const customer = { id: "cust_1", stripeCustomerId: "cus_1", plan: ["Standard"] };
+    assert.equal(await activateAfterTrialLimitIfNeeded({ customer, logger: fakeLogger() }), "activated");
+    assert.deepEqual(createdSubscriptions[0].default_tax_rates, ["txr_isolated_audit"]);
+  } finally {
+    if (previous === undefined) delete process.env.STRIPE_TAX_RATE_ID;
+    else process.env.STRIPE_TAX_RATE_ID = previous;
+  }
 });

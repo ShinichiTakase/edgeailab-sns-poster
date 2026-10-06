@@ -28,7 +28,10 @@ customerStore.updateCustomer = async (id, patch) => {
 let fakeCards = [];
 stripeClient.getStripe = () => ({
   paymentMethods: { list: async () => ({ data: fakeCards }) },
-  subscriptions: { create: async () => ({ id: "sub_new", status: "active" }) },
+  subscriptions: {
+    list: async () => ({ data: [] }),
+    create: async () => ({ id: "sub_new", status: "active" }),
+  },
 });
 
 // 自動アクティベート成功時、requireUnderTrialPostLimitはtrialLimitAutoActivation.js

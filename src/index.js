@@ -28,6 +28,10 @@ const adminXSurchargeRoutes = require("./routes/adminXSurcharge");
 const adminServerResourcesRoutes = require("./routes/adminServerResources");
 
 const app = express();
+app.use((req, res, next) => {
+  res.setHeader("X-Robots-Tag", "noindex, nofollow");
+  next();
+});
 app.use("/uploads", express.static(path.join(__dirname, "..", "uploads")));
 app.use(threadsRoutes);
 app.use(xRoutes);

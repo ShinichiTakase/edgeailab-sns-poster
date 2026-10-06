@@ -107,3 +107,14 @@ test("同一cron実行内で同一顧客の複数投稿が古い値で重複加�
   assert.equal(bumpCalls[1].delta, 1);
   assert.equal(customerCache.get("cust_1").trialPostCount, 60);
 });
+
+test("作成時は有効でも、実送信時に期限切れ・未払いなら投稿しない", async () => {
+  currentCustomer = { id: "cust_1", trialPostCount: 10, status: ["trial"], trialEndsAt: "2000-01-01T00:00:00Z" };
+  await assert.rejects(attemptScheduledPost({ id: "expired", customer_code: "cust_1", platform: ["x"], content: "test", notify_email: false }, new Map(), fakeLogger()), /payment_required/);
+  assert.equal(bumpCalls.length, 0);
+});
+
+test("再登録後の未払いactive顧客も予約実行を拒否する", async () => {
+  currentCustomer = { id: "cust_1", trialPostCount: 0, status: ["active"] };
+  await assert.rejects(attemptScheduledPost({ id: "unpaid", customer_code: "cust_1", platform: ["x"], content: "test", notify_email: false }, new Map(), fakeLogger()), /payment_required/);
+});

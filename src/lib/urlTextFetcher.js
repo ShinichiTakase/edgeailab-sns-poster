@@ -1,11 +1,9 @@
 // URL指定によるAI文案生成のため、サーバーサイドで実際にページ本文を取得する。
 // （URL文字列だけをAIプロンプトに渡して「読んだふり」の生成をさせることを禁止する要件のため、
 // 必ずここで実際にHTTPリクエストして本文を取得してからpostCopyGenerator.jsへ渡す）。
-const { assertPublicUrl } = require("./ssrfGuard");
+const { fetchPublicResource } = require("./publicUrlFetcher");
 
-const FETCH_TIMEOUT_MS = 10000;
 const MAX_TEXT_LENGTH = 8000;
-const USER_AGENT = "Mozilla/5.0 (compatible; EdgeAILabBot/1.0; +https://edgeailab.net)";
 
 function stripHtml(html) {
   const withoutScripts = html
@@ -29,27 +27,12 @@ async function fetchUrlText(url) {
   try {
     return await fetchUrlTextInner(url);
   } finally {
-    console.log(`[timing] urlTextFetcher.fetchUrlText durationMs=${Date.now() - __t0} url=${url}`);
+    console.log(`[timing] urlTextFetcher.fetchUrlText durationMs=${Date.now() - __t0}`);
   }
 }
 
 async function fetchUrlTextInner(url) {
-  await assertPublicUrl(url);
-
-  let res;
-  try {
-    res = await fetch(url, {
-      headers: { "User-Agent": USER_AGENT },
-      signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
-    });
-  } catch (e) {
-    // AbortSignal.timeout()由来の中断はe.name === "TimeoutError"（Node 20のfetch実装で確認済み）。
-    // それ以外（DNS解決失敗・接続拒否等）はTypeError("fetch failed")になる。
-    if (e.name === "TimeoutError") {
-      throw new Error("fetch_timeout");
-    }
-    throw new Error("network_error");
-  }
+  const res = await fetchPublicResource(url);
   if (!res.ok) {
     throw new Error(`fetch_failed_${res.status}`);
   }
@@ -58,7 +41,7 @@ async function fetchUrlTextInner(url) {
     throw new Error("unsupported_content_type");
   }
 
-  const html = await res.text();
+  const html = res.body.toString("utf8");
   const text = stripHtml(html);
   if (!text) {
     throw new Error("empty_content");

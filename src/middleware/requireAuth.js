@@ -19,7 +19,15 @@ function parseCookieHeader(header) {
     if (idx === -1) continue;
     const key = part.slice(0, idx).trim();
     const value = part.slice(idx + 1).trim();
-    if (key) result[key] = decodeURIComponent(value);
+    if (key) {
+      try {
+        result[key] = decodeURIComponent(value);
+      } catch {
+        // 不正なpercent encodingを例外としてasync middlewareの外へ漏らさない。
+        // セッションCookieならJWT検証で拒否される。
+        result[key] = value;
+      }
+    }
   }
   return result;
 }

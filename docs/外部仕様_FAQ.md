@@ -79,9 +79,9 @@ FAQ執筆後、記載内容を実装と突き合わせるレビューを行い�
 - **Q18**: 「1日最大3回」がアカウント全体の上限であるかのような記述だったが、実際は
   1スケジュールあたりの上限（複数スケジュールやワンショット投稿を合わせた場合は
   対象外）だったため、FAQ文言を修正した（コード変更なし）
-- **Q3**: Facebook・Instagram・ThreadsはMeta審査待ちで実際は一般利用できない
-  （`config/snsConnectionMode.json`が`dev`モード）が、審査完了後を前提とした記載を
-  維持する方針とした（現状維持）
+- **Q3**: InstagramはMeta審査待ちで一般利用できない
+  （`config/snsConnectionMode.json`が`dev`モード）。FacebookとThreadsは`live`モード。
+  FAQ本文は審査完了後を前提とした記載を維持する方針とした。
 - **Q11**: スケジュール投稿には動画を指定するUI自体が存在しないため、「スケジュール
   投稿は必ずリールになる」という記載は正しいと確認した（現状維持）
 
@@ -94,6 +94,6 @@ FAQ執筆後、記載内容を実装と突き合わせるレビューを行い�
 
 ## 要確認事項
 
-- Q3（Facebook/Instagram/ThreadsのMeta審査待ち）が解消され次第、FAQの記載自体は
+- Q3（InstagramのMeta審査待ち）が解消され次第、FAQの記載自体は
   変更不要だが、`config/snsConnectionMode.json`のdevモード解除タイミングとズレが
   生じないよう留意すること

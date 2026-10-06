@@ -15,6 +15,25 @@ const { customerHasPaymentMethod } = require("./trialPostLimitWarningMailer");
 const { sendCustomerMail } = require("./customerMailer");
 const { TRIAL_POST_LIMIT_REACHED_EMAIL } = require("./emailTemplates");
 
+const ACTIVATION_METADATA_KEY = "edgeailab_trial_activation_key";
+
+function activationKeyFor(customer) {
+  // 1顧客につき無料トライアルは1回だけという既存仕様を業務キーにする。
+  // customer.idはmicroCMSの不変IDなので、プロセス再起動後も同じキーになる。
+  return `trial-limit:${customer.id}`;
+}
+
+async function findExistingActivationSubscription(stripe, stripeCustomerId, activationKey) {
+  const page = await stripe.subscriptions.list({
+    customer: stripeCustomerId,
+    status: "all",
+    limit: 100,
+  });
+  return (page.data || []).find(
+    (subscription) => subscription.metadata?.[ACTIVATION_METADATA_KEY] === activationKey
+  ) || null;
+}
+
 /**
  * @param {object} params
  * @param {object} params.customer customersの1レコード
@@ -41,14 +60,31 @@ async function activateAfterTrialLimitIfNeeded({ customer, logger }) {
 
     const stripeCustomerId = await ensureStripeCustomer(stripe, customer);
 
+    const activationKey = activationKeyFor(customer);
+    // StripeのIdempotency-Key保持期間（24時間以上）を越えてDB保存だけが再試行
+    // された場合にも、前回作成済みの契約をmetadataから回収する。
+    let subscription = await findExistingActivationSubscription(stripe, stripeCustomerId, activationKey);
+
     // create-checkout-session（billing.js）とは異なり、意図的にtrial_endを指定しない
     // ＝作成と同時に最初のinvoiceが生成・確定され、Stripe顧客のdefault_payment_method
     // （billing.jsのpayment-methods/confirmで登録済みのはず）へ自動的に請求される。
     // 「60通到達＝支払い方法登録済みなら即時課金」という仕様のため。
-    const subscription = await stripe.subscriptions.create({
-      customer: stripeCustomerId,
-      items: [{ price: prices.base }, { price: prices.metered }, { price: prices.meteredX }],
-    });
+    if (!subscription) {
+      subscription = await stripe.subscriptions.create(
+        {
+          customer: stripeCustomerId,
+          items: [{ price: prices.base }, { price: prices.metered }, { price: prices.meteredX }],
+          metadata: { [ACTIVATION_METADATA_KEY]: activationKey },
+          // Checkout経由と同じ設定済み税率を、自動本契約化にも適用する。
+          ...(process.env.STRIPE_TAX_RATE_ID
+            ? { default_tax_rates: [process.env.STRIPE_TAX_RATE_ID] }
+            : {}),
+        },
+        // 同時実行・通信断・短時間の再試行ではStripe自身に同一リクエストとして
+        // 扱わせる。metadata照合と併用し、24時間を越えるDB再試行もカバーする。
+        { idempotencyKey: activationKey }
+      );
+    }
 
     if (subscription.status !== "active") {
       // カード自体は登録されているが、作成直後の決済が何らかの理由で失敗した場合

@@ -29,6 +29,13 @@ router.get("/api/billing/x-surcharge", (req, res) => {
 });
 
 router.post("/api/billing/create-checkout-session", requireAuth, express.json(), async (req, res) => {
+  if (!requireAdminRole(req, res)) return;
+  if (customerStore.isCanceled(req.customer)) {
+    return res.status(403).json({ error: "account_canceled" });
+  }
+  if (req.customer.stripeSubscriptionId) {
+    return res.status(409).json({ error: "subscription_already_exists" });
+  }
   const stripe = getStripe();
   if (!stripe) {
     return res.status(500).json({ error: "stripe_not_configured" });

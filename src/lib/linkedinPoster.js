@@ -1,13 +1,11 @@
 // linkedin.jsのOAuth連携で使っているPosts API（ugcPostsの後継、2023年以降の推奨エンドポイント）
 // バージョンに揃える。個人プロフィール投稿のみ対応（会社ページ投稿はLinkedIn側の審査待ち）。
-const { assertPublicUrl } = require("./ssrfGuard");
+const { fetchPublicResource } = require("./publicUrlFetcher");
 
 const POSTS_URL = "https://api.linkedin.com/rest/posts";
 const IMAGE_UPLOAD_INIT_URL = "https://api.linkedin.com/rest/images?action=initializeUpload";
 const LINKEDIN_VERSION = "202601";
-const FETCH_TIMEOUT_MS = 10000;
 const MAX_IMAGE_BYTES = 5 * 1024 * 1024; // xPoster.js/ogImageFetcher.jsと同じ上限に揃える
-const USER_AGENT = "Mozilla/5.0 (compatible; EdgeAILabBot/1.0; +https://edgeailab.net)";
 const OG_TITLE_PATTERN =
   /<meta[^>]+property=["']og:title["'][^>]*content=["']([^"']+)["']|<meta[^>]+content=["']([^"']+)["'][^>]*property=["']og:title["']/i;
 const TITLE_TAG_PATTERN = /<title[^>]*>([^<]+)<\/title>/i;
@@ -31,16 +29,12 @@ function decodeHtmlEntities(str) {
 // LinkedIn向けに専用実装している）。
 async function fetchOgMeta(pageUrl) {
   try {
-    await assertPublicUrl(pageUrl);
-    const res = await fetch(pageUrl, {
-      headers: { "User-Agent": USER_AGENT },
-      signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
-    });
+    const res = await fetchPublicResource(pageUrl);
     if (!res.ok) return null;
     const contentType = res.headers.get("content-type") || "";
     if (!contentType.includes("text/html")) return null;
 
-    const html = await res.text();
+    const html = res.body.toString("utf8");
 
     const ogTitleMatch = html.match(OG_TITLE_PATTERN);
     const rawTitle = ogTitleMatch ? ogTitleMatch[1] || ogTitleMatch[2] : (html.match(TITLE_TAG_PATTERN) || [])[1];
@@ -48,7 +42,7 @@ async function fetchOgMeta(pageUrl) {
 
     const ogImageMatch = html.match(OG_IMAGE_PATTERN);
     const rawImageUrl = ogImageMatch ? ogImageMatch[1] || ogImageMatch[2] : null;
-    const imageUrl = rawImageUrl ? new URL(rawImageUrl, pageUrl).toString() : null;
+    const imageUrl = rawImageUrl ? new URL(rawImageUrl, res.url).toString() : null;
 
     return { title, imageUrl };
   } catch (e) {
@@ -59,16 +53,12 @@ async function fetchOgMeta(pageUrl) {
 // og:imageの画像バイナリをダウンロードする（ogImageFetcher.jsのfetchOgImageと同じ検証基準）。
 async function downloadImage(imageUrl) {
   try {
-    await assertPublicUrl(imageUrl);
-    const res = await fetch(imageUrl, {
-      headers: { "User-Agent": USER_AGENT },
-      signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
-    });
+    const res = await fetchPublicResource(imageUrl, { maxBytes: MAX_IMAGE_BYTES });
     if (!res.ok) return null;
     const contentType = (res.headers.get("content-type") || "").split(";")[0].trim();
     if (!/^image\/(jpeg|png|gif|webp)$/i.test(contentType)) return null;
 
-    const buffer = Buffer.from(await res.arrayBuffer());
+    const buffer = res.body;
     if (buffer.length === 0 || buffer.length > MAX_IMAGE_BYTES) return null;
     return { buffer, mimeType: contentType };
   } catch (e) {
