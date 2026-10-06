@@ -28,7 +28,7 @@
 
 ## 投稿先・リリース方針
 
-2026-09-30時点のユーザー確認事項: Xは審査なし、Facebook Page・Threadsは審査通過、Instagramは審査中。Instagram承認後にリリースする。LinkedIn個人プロフィールは審査なしで初回対象、法人ページは審査中で初回対象外。
+2026-10-06時点のユーザー確認事項: Xは審査なし、Facebook Page・Threads・Instagramは審査通過。LinkedIn個人プロフィールは審査なしで提供対象、法人ページは審査中で対象外。
 
 - 確認済みLinkedIn実装は `openid profile w_member_social` を要求し、投稿者・画像所有者に `urn:li:person:…` を使用する。法人投稿に勝手に拡張しない。
 - Facebook予約投稿はPage IDとPageアクセストークンを使用する。個人プロフィール投稿は対象外。

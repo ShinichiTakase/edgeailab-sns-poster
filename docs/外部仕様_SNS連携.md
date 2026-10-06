@@ -10,8 +10,9 @@ X・Threads・Facebook・InstagramのアカウントをOAuth連携し、投稿�
 連携・解除は`onboarding.html`（設定専用画面）とダッシュボードのSNS連携状況アイコンの
 両方から行える。
 
-**重要: 2026-08-22時点でFacebook・Instagram・Threadsは実質未公開（Meta審査上の
-Dev Modeに限定）。一般顧客が実際に連携できるのはXのみ**（内部仕様参照）。
+2026-10-06時点でFacebook・Instagram・ThreadsはMeta審査通過済みで一般利用可能。
+X、Facebook Page、Instagram、Threads、LinkedIn個人プロフィールを正式提供対象とする。
+Facebook個人プロフィールとLinkedIn会社ページへの投稿は対象外。
 
 ## 連携設定画面（onboarding.html）
 
@@ -30,6 +31,8 @@ Dev Modeに限定）。一般顧客が実際に連携できるのはXのみ**（
   ご希望のアカウントに連携されていることを確認してください」
 
 2026-10-01: Threads・Facebook・Instagramの許可リスト限定を解除する設定に変更。未連携でプラン上限に達していない操作可能なユーザーには「連携する」リンクを表示する（本番配備後に適用）。
+
+2026-10-06: InstagramのMeta審査承認を確認し、Instagramを正式提供対象として`live`モードへ変更。
 
 ### 連携完了・エラー時の表示
 
@@ -107,8 +110,7 @@ Dev Modeに限定）。一般顧客が実際に連携できるのはXのみ**（
 
 ## 要確認事項
 
-- Facebook・Instagram・Threadsは現状Dev Mode制限により一般顧客は連携できない。
-  マーケティング上の訴求（「4つのSNSに対応」等）と実際の利用可否に齟齬がないか要確認
+- Facebook・Instagram・Threadsは`live`モード。公開サイトの対応SNS表記と設定を同時に更新すること
 - 連携解除確認モーダルの文言「投稿の自動化が停止します」は、新規の自動投稿が
   行われなくなることは示しているが、**既に予約済みの投稿がキャンセルされる**ことまでは
   明示していない。連携解除の直前にスケジュール詳細・投稿一覧で予約内容を確認していた

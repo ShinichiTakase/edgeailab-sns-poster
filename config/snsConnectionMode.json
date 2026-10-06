@@ -1,6 +1,6 @@
 {
   "facebook": { "mode": "live", "allowedSlugs": ["biza3cp70", "k22n7qwhimx", "eagvpvste2cu"] },
-  "instagram": { "mode": "dev", "allowedSlugs": ["biza3cp70", "k22n7qwhimx", "eagvpvste2cu"] },
+  "instagram": { "mode": "live", "allowedSlugs": ["biza3cp70", "k22n7qwhimx", "eagvpvste2cu"] },
   "threads": { "mode": "live", "allowedSlugs": ["biza3cp70", "k22n7qwhimx", "eagvpvste2cu"] },
   "x": { "mode": "live" },
   "linkedin": { "mode": "live" }

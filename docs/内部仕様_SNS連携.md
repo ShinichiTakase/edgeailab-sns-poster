@@ -426,7 +426,7 @@ OAuth開始route専用のサーバーサイドゲート。2段階チェック:
 ```json
 {
   "facebook": { "mode": "live", "allowedSlugs": ["biza3cp70", "k22n7qwhimx", "eagvpvste2cu"] },
-  "instagram": { "mode": "dev", "allowedSlugs": ["biza3cp70", "k22n7qwhimx", "eagvpvste2cu"] },
+  "instagram": { "mode": "live", "allowedSlugs": ["biza3cp70", "k22n7qwhimx", "eagvpvste2cu"] },
   "threads": { "mode": "live", "allowedSlugs": ["biza3cp70", "k22n7qwhimx", "eagvpvste2cu"] },
   "x": { "mode": "live" }
 }
@@ -461,6 +461,8 @@ Meta審査（App Review）自体はまだ完了しておらず現在もDevモー
 2026-10-01: onboarding.htmlの連携ボタン有効化の依頼により、Facebook・Instagram・Threadsを`mode: "live"`へ変更。APIの`available`判定とOAuth開始ガードの両方で許可リスト制限を解除する。プラン接続数上限・閲覧者の操作制限は継続する。`allowedSlugs`はトライアル履歴の検証用アカウント判定にも使うため保持する。この設定はアプリ内部の利用可否であり、Meta側の審査状態を変更するものではない。本番反映には別途配備が必要。
 
 2026-10-06: Instagramは外部審査中のため`mode: "dev"`へ戻した。FacebookとThreadsは`live`を維持する。
+
+2026-10-06: InstagramのMeta審査承認を人間が確認したため、`mode: "live"`へ変更し正式提供を開始。Facebook・Threadsも引き続き`live`を維持する。FacebookはFacebook Pageのみ、LinkedInは個人プロフィールのみを提供対象とする。
 
 ## planLimitsConfig.js + config/planLimits.json
 
