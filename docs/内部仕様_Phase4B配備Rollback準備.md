@@ -4,7 +4,7 @@
 
 既定sentinelはコンテナ内の `/run/edgeailab-sns-poster-write-freeze`。image内では共有data mountの `/app/data/.write-freeze` を指すsymlinkにする。これによりAPIコンテナでsentinelを作成した後に起動するone-shot containerも同じfreeze状態を見る。存在中はHTTPのPOST/PUT/PATCH/DELETE、OAuth経路、callback、GETで状態を変更するメール認証を503で拒否する。read-only GETは継続する。Stripe webhookもraw body処理・署名検証・ledger更新より前に503を返す。
 
-cron/one-shot serviceは `writeFreezeGuardedRunner.js` を必ず経由する。sentinel存在中は子scriptを起動せず終了コード75とする。sentinelパスはテスト時のみ `SNS_POSTER_WRITE_FREEZE_PATH` で一時領域へ変更できる。
+cron/one-shot serviceは `writeFreezeGuardedRunner.js` を必ず経由する。呼び出し形式は `node writeFreezeGuardedRunner.js <許可済みscript basename> [args...]` とし、明示allowlistに含まれるbatchだけを実行する。追加引数はshellを介さず、順序と内容を保って子Node processへ渡す。sentinel存在中は引数を解釈・実行せず子scriptを起動せず終了コード75とする。sentinelパスはテスト時のみ `SNS_POSTER_WRITE_FREEZE_PATH` で一時領域へ変更できる。
 
 ## Reverse writer
 

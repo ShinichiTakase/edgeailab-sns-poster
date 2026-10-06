@@ -46,7 +46,7 @@ services:
     command: ["node", "src/scripts/writeFreezeGuardedRunner.js", "adminStatsDailyBatch.js"]
   sns-poster-x-surcharge-schedule-apply:
     <<: *sns-poster-runtime
-    command: ["node", "src/scripts/writeFreezeGuardedRunner.js", "xSurchargeScheduleApply.js"]
+    command: ["node", "src/scripts/writeFreezeGuardedRunner.js", "xSurchargeScheduleApply.js", "--apply"]
   sns-poster-trial-reminder-check:
     <<: *sns-poster-runtime
     command: ["node", "src/scripts/writeFreezeGuardedRunner.js", "trialReminderCheck.js"]
