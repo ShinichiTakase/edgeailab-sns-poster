@@ -129,3 +129,5 @@ module.exports = {
   updateSchedule,
   deleteSchedule,
 };
+
+module.exports = require("../data/storeSelector").selectStore("scheduleStore", module.exports);

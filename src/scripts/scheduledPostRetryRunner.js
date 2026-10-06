@@ -22,8 +22,12 @@ const { sendScheduleResultEmail } = require("../lib/scheduleResultMailer");
 const { sendOneShotPostResultEmail } = require("../lib/oneShotPostResultMailer");
 const { announcePostFailure } = require("../lib/postFailureAnnouncer");
 const { logInfo, logWarn, logError } = require("../lib/logger").createLogger("scheduled-post-retry-runner.log");
+const { getDataSourceName } = require("../data/dataSource");
 
 async function main() {
+  if (getDataSourceName() === "sqlite") {
+    return require("./scheduledPostRunner").runSqliteMode();
+  }
   const failedPosts = await listFailedScheduledPosts(SCOPE_CUTOFF_AT);
   const dueForRetry = failedPosts.filter((post) => retryStore.isDueForRetry(post.id));
 
@@ -95,7 +99,9 @@ async function main() {
   logInfo(`[scheduled-post-retry-runner] done. succeeded=${succeeded} failed=${failed}`);
 }
 
-main().catch((err) => {
+if (require.main === module) main().catch((err) => {
   logError("[scheduled-post-retry-runner] fatal error:", err);
   process.exit(1);
 });
+
+module.exports = { main };

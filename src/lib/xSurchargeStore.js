@@ -82,3 +82,5 @@ module.exports = {
   setReservation,
   clearReservation,
 };
+
+module.exports = require("../data/storeSelector").selectStore("xSurchargeStore", module.exports);

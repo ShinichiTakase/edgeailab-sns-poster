@@ -79,7 +79,7 @@ router.get("/oauth/facebook/start", requireAuth, blockExpiredTrial, blockViewerR
   const slug = req.customer.id;
 
   const state = crypto.randomBytes(24).toString("hex");
-  pkceStore.put(state, { slug });
+  pkceStore.put(state, { slug, platform: "facebook" });
 
   const url = new URL(AUTHORIZE_URL);
   url.searchParams.set("client_id", process.env.FACEBOOK_APP_ID);

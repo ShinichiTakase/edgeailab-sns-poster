@@ -32,3 +32,5 @@ function isFromScheduledPost(postingLogId) {
 }
 
 module.exports = { recordScheduledOrigin, isFromScheduledPost };
+
+module.exports = require("../data/storeSelector").selectStore("postingLogOriginStore", module.exports);

@@ -317,3 +317,5 @@ module.exports = {
   getScheduledPostsSummary,
   createScheduledPost,
 };
+
+module.exports = require("../data/storeSelector").selectStore("scheduledPostStore", module.exports);

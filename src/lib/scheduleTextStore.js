@@ -152,3 +152,5 @@ module.exports = {
   updateScheduleText,
   deleteScheduleText,
 };
+
+module.exports = require("../data/storeSelector").selectStore("scheduleTextStore", module.exports);

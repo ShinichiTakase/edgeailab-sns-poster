@@ -5,7 +5,7 @@ const fs = require("fs");
 const path = require("path");
 
 function createLogger(logFileName) {
-  const LOG_FILE = path.join(__dirname, "..", "..", "json", logFileName);
+  const LOG_FILE = path.join(process.env.SNS_POSTER_LOG_DIR || path.join(__dirname, "..", "..", "json"), logFileName);
 
   function writeLogFile(level, args) {
     const message = args

@@ -26,39 +26,51 @@ const adminPostsRoutes = require("./routes/adminPosts");
 const adminPasswordResetRoutes = require("./routes/adminPasswordReset");
 const adminXSurchargeRoutes = require("./routes/adminXSurcharge");
 const adminServerResourcesRoutes = require("./routes/adminServerResources");
+const { writeFreezeMiddleware } = require("./lib/writeFreeze");
 
-const app = express();
-app.use((req, res, next) => {
-  res.setHeader("X-Robots-Tag", "noindex, nofollow");
-  next();
-});
-app.use("/uploads", express.static(path.join(__dirname, "..", "uploads")));
-app.use(threadsRoutes);
-app.use(xRoutes);
-app.use(facebookRoutes);
-app.use(instagramRoutes);
-app.use(linkedinRoutes);
-app.use(authRoutes);
-app.use(billingRoutes);
-app.use(teamRoutes);
-app.use(snsConnectionsRoutes);
-app.use(accountRoutes);
-app.use(postsRoutes);
-app.use(uploadsRoutes);
-app.use(aiRoutes);
-app.use(schedulesRoutes);
-app.use(scheduleVideosRoutes);
-app.use(approvalsRoutes);
-app.use(invoicesRoutes);
-app.use(announcementsRoutes);
-app.use(adminStatsRoutes);
-app.use(adminCustomersRoutes);
-app.use(adminPostsRoutes);
-app.use(adminPasswordResetRoutes);
-app.use(adminXSurchargeRoutes);
-app.use(adminServerResourcesRoutes);
+function createApp() {
+  const app = express();
+  app.use((req, res, next) => {
+    res.setHeader("X-Robots-Tag", "noindex, nofollow");
+    next();
+  });
+  app.use(writeFreezeMiddleware());
+  app.use("/uploads", express.static(path.join(__dirname, "..", "uploads")));
+  app.use(threadsRoutes);
+  app.use(xRoutes);
+  app.use(facebookRoutes);
+  app.use(instagramRoutes);
+  app.use(linkedinRoutes);
+  app.use(authRoutes);
+  app.use(billingRoutes);
+  app.use(teamRoutes);
+  app.use(snsConnectionsRoutes);
+  app.use(accountRoutes);
+  app.use(postsRoutes);
+  app.use(uploadsRoutes);
+  app.use(aiRoutes);
+  app.use(schedulesRoutes);
+  app.use(scheduleVideosRoutes);
+  app.use(approvalsRoutes);
+  app.use(invoicesRoutes);
+  app.use(announcementsRoutes);
+  app.use(adminStatsRoutes);
+  app.use(adminCustomersRoutes);
+  app.use(adminPostsRoutes);
+  app.use(adminPasswordResetRoutes);
+  app.use(adminXSurchargeRoutes);
+  app.use(adminServerResourcesRoutes);
 
-const port = process.env.PORT || 3000;
-app.listen(port, () => {
-  console.info(`[sns-poster] listening on port ${port}`);
-});
+  return app;
+}
+
+function startServer(port = process.env.PORT || 3000) {
+  const app = createApp();
+  return app.listen(port, () => {
+    console.info(`[sns-poster] listening on port ${port}`);
+  });
+}
+
+if (require.main === module) startServer();
+
+module.exports = { createApp, startServer };

@@ -295,3 +295,7 @@ module.exports = {
   sendApprovalRequestEmails,
   sendApprovalDecidedEmail,
 };
+
+if (require("../data/dataSource").getDataSourceName() === "sqlite") {
+  module.exports = require("../data/sqliteApprovalStore").createSqliteApprovalStore(module.exports);
+}

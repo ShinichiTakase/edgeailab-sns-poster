@@ -46,7 +46,7 @@ router.get("/oauth/x/authorize", requireAuth, blockExpiredTrial, blockViewerRole
   const codeChallenge = crypto.createHash("sha256").update(codeVerifier).digest("base64url");
   const state = crypto.randomBytes(24).toString("hex");
 
-  pkceStore.put(state, { slug, codeVerifier });
+  pkceStore.put(state, { slug, platform: "x", codeVerifier });
 
   const url = new URL(AUTHORIZE_URL);
   url.searchParams.set("response_type", "code");

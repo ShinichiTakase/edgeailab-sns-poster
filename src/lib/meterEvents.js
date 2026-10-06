@@ -4,7 +4,7 @@
 // で設定されているため、payloadのキー名はこれに合わせる。
 const { getStripe } = require("./stripeClient");
 
-async function reportMeterEvent(eventName, stripeCustomerId) {
+async function reportMeterEvent(eventName, stripeCustomerId, idempotencyKey) {
   const stripe = getStripe();
   if (!stripe || !stripeCustomerId) return;
   await stripe.billing.meterEvents.create({
@@ -13,7 +13,7 @@ async function reportMeterEvent(eventName, stripeCustomerId) {
       stripe_customer_id: stripeCustomerId,
       value: "1",
     },
-  });
+  }, idempotencyKey ? { idempotencyKey } : undefined);
 }
 
 module.exports = { reportMeterEvent };

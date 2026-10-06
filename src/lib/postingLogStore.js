@@ -206,3 +206,5 @@ module.exports = {
   getPostStatsForCustomer,
   getActualPostCounts,
 };
+
+module.exports = require("../data/storeSelector").selectStore("postingLogStore", module.exports);

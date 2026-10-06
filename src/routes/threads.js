@@ -38,7 +38,7 @@ const SCOPE = "threads_basic,threads_content_publish";
 router.get("/oauth/threads/start", requireAuth, blockExpiredTrial, blockViewerRoleRedirect, blockEditorRoleRedirect, blockApproverRoleRedirect, requireSnsConnectionAvailable("threads"), (req, res) => {
   const slug = req.customer.id;
   const state = crypto.randomBytes(24).toString("hex");
-  pkceStore.put(state, { slug });
+  pkceStore.put(state, { slug, platform: "threads" });
 
   const url = new URL(AUTHORIZE_URL);
   url.searchParams.set("client_id", process.env.THREADS_APP_ID);

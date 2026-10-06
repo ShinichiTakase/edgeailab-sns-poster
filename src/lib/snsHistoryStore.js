@@ -67,3 +67,5 @@ function recordNewIdentifiers(platform, identifiers, customerId, connectedAt) {
 }
 
 module.exports = { loadHistory, saveHistory, historyKey, findOtherCustomerHit, recordNewIdentifiers };
+
+module.exports = require("../data/storeSelector").selectStore("snsHistoryStore", module.exports);

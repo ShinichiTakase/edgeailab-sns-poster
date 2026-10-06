@@ -27,3 +27,5 @@ setInterval(() => {
 }, 5 * 60 * 1000).unref();
 
 module.exports = { put, take };
+
+module.exports = require("../data/storeSelector").selectStore("pkceStore", module.exports);

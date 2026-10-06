@@ -81,3 +81,5 @@ module.exports = {
   isDueForRetry,
   getDisplayState,
 };
+
+module.exports = require("../data/storeSelector").selectStore("scheduledPostRetryStore", module.exports);

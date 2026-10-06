@@ -19,8 +19,53 @@ const { listDuePendingScheduledPosts, markScheduledPostStatus, SCOPE_CUTOFF_AT }
 const { attemptScheduledPost } = require("../lib/scheduledPostExecutor");
 const retryStore = require("../lib/scheduledPostRetryStore");
 const { logInfo, logWarn, logError } = require("../lib/logger").createLogger("scheduled-post-runner.log");
+const { getDataSourceName, getSqliteContext } = require("../data/dataSource");
+
+async function runSqliteMode() {
+  const { db, keyring } = getSqliteContext();
+  const { createSqliteScheduledPostRunner } = require("../services/sqliteScheduledPostRunner");
+  const { postToPlatform } = require("../lib/scheduledPostExecutor");
+  const { loadStore } = require("../lib/tokenStore");
+  const { shouldNotifyForScheduledPost } = require("../services/notificationPolicy");
+  const customerStore = require("../lib/customerStore");
+  const scheduleStore = require("../lib/scheduleStore");
+  const { sendScheduleResultEmail } = require("../lib/scheduleResultMailer");
+  const { sendOneShotPostResultEmail } = require("../lib/oneShotPostResultMailer");
+  const { reportMeterEvent } = require("../lib/meterEvents");
+  const { activateAfterTrialLimitIfNeeded } = require("../lib/trialLimitAutoActivation");
+  let runner;
+  runner = createSqliteScheduledPostRunner(db, {
+    keyring,
+    beforeRequest: async (post) => {
+      const customer = await customerStore.getCustomerById(post.customer_id);
+      if (!customer) throw Object.assign(new Error("customer_not_found"), { retrySafe: true });
+      if (customerStore.isCanceled(customer)) throw Object.assign(new Error("account_canceled"), { retrySafe: true });
+      if (customerStore.isTrialPostLimitReached(customer)) {
+        const activated = await activateAfterTrialLimitIfNeeded({ customer, logger: { logError } });
+        if (activated !== "activated") throw Object.assign(new Error("trial_post_limit_reached"), { retrySafe: true });
+        return;
+      }
+      if (customerStore.requiresPaymentRegistration(customer)) throw Object.assign(new Error("payment_required"), { retrySafe: true });
+    },
+    postToPlatform: async (post, lifecycle) => {
+      const customer = await customerStore.getCustomerById(post.customer_id);
+      const entry = (loadStore()[customer.slug] || {})[post.platform];
+      if (!entry) throw Object.assign(new Error("not_connected"), { retrySafe: true });
+      return postToPlatform(post.platform, entry, post.content, post.image_url, post.video_url,
+        post.facebook_page_id, { logError }, lifecycle);
+    },
+    effectHandlers: require("../services/sqliteScheduledPostEffects").createSqliteScheduledPostEffects({
+      db, repositories: () => runner.repositories, customerStore, scheduleStore, sendScheduleResultEmail,
+      sendOneShotPostResultEmail, reportMeterEvent, logger: { logError },
+    }),
+  });
+  runner.recoverExpiredLeases();
+  let result;
+  do { result = await runner.runOne(); } while (result);
+}
 
 async function main() {
+  if (getDataSourceName() === "sqlite") return runSqliteMode();
   const duePosts = await listDuePendingScheduledPosts(SCOPE_CUTOFF_AT);
   if (duePosts.length === 0) {
     logInfo("[scheduled-post-runner] no due posts");
@@ -53,7 +98,9 @@ async function main() {
   logInfo(`[scheduled-post-runner] done. succeeded=${succeeded} failed=${failed}`);
 }
 
-main().catch((err) => {
+if (require.main === module) main().catch((err) => {
   logError("[scheduled-post-runner] fatal error:", err);
   process.exit(1);
 });
+
+module.exports = { main, runSqliteMode };

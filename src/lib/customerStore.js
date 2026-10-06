@@ -760,3 +760,5 @@ module.exports = {
   acceptInvitation,
   removeMember,
 };
+
+module.exports = require("../data/storeSelector").selectStore("customerStore", module.exports);

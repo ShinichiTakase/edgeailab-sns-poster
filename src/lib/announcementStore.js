@@ -91,3 +91,5 @@ function listAllOfType(type) {
 }
 
 module.exports = { createAnnouncement, listForCustomer, hasUnread, markRead, listAllOfType };
+
+module.exports = require("../data/storeSelector").selectStore("announcementStore", module.exports);

@@ -11,6 +11,8 @@ const { BACKUP_CARD_CHARGED_EMAIL, PAYMENT_SUCCEEDED_EMAIL } = require("../lib/e
 const { sendCustomerMail } = require("../lib/customerMailer");
 const { notifyFailure } = require("../lib/mailer");
 const { activateAfterTrialLimitIfNeeded } = require("../lib/trialLimitAutoActivation");
+const { getDataSourceName, getSqliteContext } = require("../data/dataSource");
+const { createStripeWebhookRepository } = require("../repositories/stripeWebhookRepository");
 
 const router = express.Router();
 
@@ -679,6 +681,14 @@ router.post("/api/billing/webhook", express.raw({ type: "application/json" }), a
     return res.status(400).send(`Webhook Error: ${err.message}`);
   }
 
+  let webhookLedger = null;
+  if (getDataSourceName() === "sqlite") {
+    webhookLedger = createStripeWebhookRepository(getSqliteContext().db);
+    if (!webhookLedger.begin({ eventId: event.id, eventType: event.type })) {
+      return res.json({ received: true, duplicate: true });
+    }
+  }
+
   try {
     if (event.type === "checkout.session.completed") {
       const session = event.data.object;
@@ -698,8 +708,10 @@ router.post("/api/billing/webhook", express.raw({ type: "application/json" }), a
     } else if (event.type === "invoice.paid") {
       await handleInvoicePaid(stripe, event);
     }
+    if (webhookLedger) webhookLedger.finish(event.id, { state: "done" });
     res.json({ received: true });
   } catch (err) {
+    if (webhookLedger) webhookLedger.finish(event.id, { state: "failed", error: String(err.message || err).slice(0, 1000) });
     console.error("[billing/webhook] handling failed:", err);
     res.status(500).send("internal error");
   }

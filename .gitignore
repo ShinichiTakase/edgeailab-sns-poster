@@ -2,3 +2,8 @@
 /json/
 /uploads/
 node_modules/
+/data/*.sqlite3
+/data/*.sqlite3-shm
+/data/*.sqlite3-wal
+/data/*.sqlite3-journal
+/exports/

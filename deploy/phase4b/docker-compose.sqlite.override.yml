@@ -1,0 +1,58 @@
+# Phase 4B candidate only. Apply together with the production Compose file after approval.
+x-sns-poster-runtime: &sns-poster-runtime
+  build: !reset null
+  image: edgeailab/sns-poster:${SNS_POSTER_IMAGE_TAG:?SNS_POSTER_IMAGE_TAG is required}
+  env_file:
+    - path: /etc/edgeailab/sns-poster-sqlite.env
+      required: false
+  volumes:
+    - /opt/project/edgeailab.net/sns-poster/data:/app/data
+
+services:
+  sns-poster:
+    <<: *sns-poster-runtime
+  sns-poster-x-refresh:
+    <<: *sns-poster-runtime
+    command: ["node", "src/scripts/writeFreezeGuardedRunner.js", "refreshXTokens.js"]
+  sns-poster-instagram-refresh:
+    <<: *sns-poster-runtime
+    command: ["node", "src/scripts/writeFreezeGuardedRunner.js", "refreshInstagramTokens.js"]
+  sns-poster-threads-refresh:
+    <<: *sns-poster-runtime
+    command: ["node", "src/scripts/writeFreezeGuardedRunner.js", "refreshThreadsTokens.js"]
+  sns-poster-scheduled-post-runner:
+    <<: *sns-poster-runtime
+    command: ["node", "src/scripts/writeFreezeGuardedRunner.js", "scheduledPostRunner.js"]
+  sns-poster-approval-expiry-check:
+    <<: *sns-poster-runtime
+    command: ["node", "src/scripts/writeFreezeGuardedRunner.js", "approvalExpiryCheck.js"]
+  sns-poster-scheduled-post-retry-runner:
+    <<: *sns-poster-runtime
+    command: ["node", "src/scripts/writeFreezeGuardedRunner.js", "scheduledPostRetryRunner.js"]
+  sns-poster-schedule-materializer:
+    <<: *sns-poster-runtime
+    command: ["node", "src/scripts/writeFreezeGuardedRunner.js", "scheduleMaterializer.js"]
+  sns-poster-schedule-auto-pause-sync:
+    <<: *sns-poster-runtime
+    command: ["node", "src/scripts/writeFreezeGuardedRunner.js", "scheduleAutoPauseSync.js"]
+  sns-poster-canceled-card-cleanup:
+    <<: *sns-poster-runtime
+    command: ["node", "src/scripts/writeFreezeGuardedRunner.js", "canceledCardCleanup.js"]
+  sns-poster-admin-stats-monthly-batch:
+    <<: *sns-poster-runtime
+    command: ["node", "src/scripts/writeFreezeGuardedRunner.js", "adminStatsMonthlyBatch.js"]
+  sns-poster-admin-stats-daily-batch:
+    <<: *sns-poster-runtime
+    command: ["node", "src/scripts/writeFreezeGuardedRunner.js", "adminStatsDailyBatch.js"]
+  sns-poster-x-surcharge-schedule-apply:
+    <<: *sns-poster-runtime
+    command: ["node", "src/scripts/writeFreezeGuardedRunner.js", "xSurchargeScheduleApply.js"]
+  sns-poster-trial-reminder-check:
+    <<: *sns-poster-runtime
+    command: ["node", "src/scripts/writeFreezeGuardedRunner.js", "trialReminderCheck.js"]
+  sns-poster-trial-post-limit-auto-activation-sync:
+    <<: *sns-poster-runtime
+    command: ["node", "src/scripts/writeFreezeGuardedRunner.js", "trialPostLimitAutoActivationSync.js"]
+  sns-poster-orphan-sns-token-check:
+    <<: *sns-poster-runtime
+    command: ["node", "src/scripts/writeFreezeGuardedRunner.js", "orphanSnsTokenCheck.js"]

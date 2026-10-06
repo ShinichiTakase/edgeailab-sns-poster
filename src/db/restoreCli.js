@@ -1,0 +1,1 @@
+const { restoreBackup }=require("./backup");const [source,destination]=process.argv.slice(2);if(!source||!destination)throw new Error("usage: node src/db/restoreCli.js BACKUP_DB NEW_DB");const db=restoreBackup(source,destination);db.close();console.log(JSON.stringify({ok:true}));

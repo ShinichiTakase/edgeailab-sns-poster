@@ -103,3 +103,5 @@ module.exports = {
   findDuplicateOwner,
   accountNameFor,
 };
+
+module.exports = require("../data/storeSelector").selectStore("tokenStore", module.exports);

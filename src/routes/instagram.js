@@ -104,7 +104,7 @@ router.get("/oauth/instagram/start", requireAuth, blockExpiredTrial, blockViewer
   const slug = req.customer.id;
 
   const state = crypto.randomBytes(24).toString("hex");
-  pkceStore.put(state, { slug });
+  pkceStore.put(state, { slug, platform: "instagram" });
 
   const url = new URL(AUTHORIZE_URL);
   url.searchParams.set("force_reauth", "true");
@@ -193,7 +193,7 @@ router.get("/oauth/instagram/callback", async (req, res) => {
     const existing = getConnectedEntry(slug).instagram;
     if (existing && existing.user_id !== profile.id) {
       const switchToken = crypto.randomBytes(24).toString("hex");
-      pkceStore.put(switchToken, { slug, tokenData });
+      pkceStore.put(switchToken, { slug, platform: "instagram", tokenData });
       logWarn(
         `[instagram/callback] switch pending: slug=${slug} from=${existing.username || existing.user_id} to=${profile.username}`
       );

@@ -111,7 +111,7 @@ router.post("/api/sns-connections/confirm-trial-history-reconnect", requireAuth,
     const existing = getConnectedEntry(pending.slug).instagram;
     if (existing && existing.user_id !== tokenData.user_id) {
       const switchToken = crypto.randomBytes(24).toString("hex");
-      pkceStore.put(switchToken, { slug: pending.slug, tokenData, trialHistoryIdentifiers: identifiers });
+      pkceStore.put(switchToken, { slug: pending.slug, platform, tokenData, trialHistoryIdentifiers: identifiers });
       logInfo(
         `[sns-connections/confirm-trial-history-reconnect] slug=${pending.slug} platform=instagram needs switch confirm too (from=${existing.username || existing.user_id} to=${tokenData.username})`
       );

@@ -41,7 +41,7 @@ const SCOPE = "openid profile w_member_social";
 router.get("/oauth/linkedin/start", requireAuth, blockExpiredTrial, blockViewerRoleRedirect, blockEditorRoleRedirect, blockApproverRoleRedirect, requireSnsConnectionAvailable("linkedin"), (req, res) => {
   const slug = req.customer.id;
   const state = crypto.randomBytes(24).toString("hex");
-  pkceStore.put(state, { slug });
+  pkceStore.put(state, { slug, platform: "linkedin" });
 
   const url = new URL(AUTHORIZE_URL);
   url.searchParams.set("response_type", "code");
