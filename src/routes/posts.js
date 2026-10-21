@@ -420,7 +420,7 @@ router.post(
   }
 );
 
-const PLATFORM_DISPLAY_LABELS = { x: "X", threads: "Threads", facebook: "Facebook", instagram: "Instagram", linkedin: "LinkedIn" };
+const PLATFORM_DISPLAY_LABELS = { x: "X", threads: "Threads", facebook: "Facebook", facebook_reel: "Facebook（リール）", instagram: "Instagram", linkedin: "LinkedIn" };
 
 function platformDisplayLabel(value) {
   const key = Array.isArray(value) ? value[0] : value;

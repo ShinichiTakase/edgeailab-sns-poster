@@ -103,6 +103,7 @@ async function postReel({ igUserId, accessToken }, text, videoUrl, { existingCon
       // プロフィールのグリッド（フィード）にも自動的に二重掲載されてしまう。
       // リールのみに投稿するため明示的にfalseを指定する。
       share_to_feed: false,
+      thumb_offset: 0,
       access_token: accessToken,
     }),
   });

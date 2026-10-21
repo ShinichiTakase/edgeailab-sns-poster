@@ -25,7 +25,7 @@ function getSqliteContext(env = process.env) {
     const config = sqliteConfig(env);
     const db = openDatabase(config.filename);
     const latest = db.prepare("SELECT version FROM schema_migrations ORDER BY version DESC LIMIT 1").get();
-    if (!latest || Number(latest.version) < 5) {
+    if (!latest || Number(latest.version) < 6) {
       db.close();
       throw new Error("SQLite schema is not migrated through SQLite-only runtime support; automatic migration is disabled");
     }

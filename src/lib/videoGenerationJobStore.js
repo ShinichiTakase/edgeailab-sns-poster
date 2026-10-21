@@ -187,6 +187,7 @@ function startVideoGenerationJob({ sourceText, url, backgroundImageUrls }) {
             return;
           }
           slot.status = "error";
+          job.error = err.code || "video_generation_failed";
           console.error(`[videoGenerationJobStore] slot ${slot.index} failed:`, err);
         }
       });
@@ -196,7 +197,7 @@ function startVideoGenerationJob({ sourceText, url, backgroundImageUrls }) {
           `jobTotalMs=${Date.now() - __jobT0}`
       );
       if (job.status === "running") {
-        job.status = "done";
+        job.status = job.slots.some(s => s.status === "error") ? "error" : "done";
       }
     }
   })();

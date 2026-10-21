@@ -10,7 +10,7 @@ function createScheduledPostJobRepository(db, { now = () => new Date().toISOStri
       const job = db.prepare(`UPDATE scheduled_post_jobs SET
           state='processing', current_attempt_id=@attemptId, lease_owner=@workerId, lease_expires_at=@leaseExpiresAt,
           attempt_count=attempt_count+1, updated_at=@timestamp, version=version+1,
-          last_error_code=NULL, last_error_message=NULL
+          last_error_code=NULL, last_error_message=NULL, request_started_at=NULL
         WHERE scheduled_post_id = (
           SELECT j.scheduled_post_id FROM scheduled_post_jobs j
           JOIN scheduled_posts p ON p.id=j.scheduled_post_id
@@ -46,6 +46,21 @@ function createScheduledPostJobRepository(db, { now = () => new Date().toISOStri
     db.prepare("UPDATE scheduled_post_attempts SET external_container_id=? WHERE id=?").run(externalContainerId, attemptId);
   }
 
+  function heartbeat({ scheduledPostId, workerId, attemptId, leaseExpiresAt, at = now() }) {
+    const r = db.prepare(`UPDATE scheduled_post_jobs SET lease_expires_at=? WHERE scheduled_post_id=?
+      AND state='processing' AND lease_owner=? AND current_attempt_id=? AND lease_expires_at>=?`)
+      .run(leaseExpiresAt, scheduledPostId, workerId, attemptId, at);
+    if (r.changes !== 1) throw new Error("job lease lost");
+  }
+  function recordStage({ scheduledPostId, workerId, attemptId, stage, at = now() }) {
+    const r = db.prepare(`UPDATE scheduled_post_jobs SET upload_stage=?,
+      publish_started_at=CASE WHEN ?='publish_requested' THEN ? ELSE publish_started_at END,
+      publish_confirmed_at=CASE WHEN ?='published' THEN ? ELSE publish_confirmed_at END,
+      updated_at=?,version=version+1 WHERE scheduled_post_id=? AND state='processing'
+      AND lease_owner=? AND current_attempt_id=? AND lease_expires_at>=?`)
+      .run(stage,stage,at,stage,at,at,scheduledPostId,workerId,attemptId,at);
+    if (r.changes !== 1) throw new Error("job lease lost");
+  }
   function get(scheduledPostId) {
     return db.prepare("SELECT * FROM scheduled_post_jobs WHERE scheduled_post_id=?").get(scheduledPostId) || null;
   }
@@ -103,7 +118,7 @@ function createScheduledPostJobRepository(db, { now = () => new Date().toISOStri
     });
   }
 
-  return { claimNext, markRequestStarted, recordExternalContainer, get, markSent, markFailed, markAmbiguous, recoverExpiredLeases, markDone, cancel };
+  return { heartbeat, recordStage, claimNext, markRequestStarted, recordExternalContainer, get, markSent, markFailed, markAmbiguous, recoverExpiredLeases, markDone, cancel };
 }
 
 module.exports = { createScheduledPostJobRepository };

@@ -13,7 +13,7 @@ const approvalStore = require("../lib/approvalStore");
 
 const router = express.Router();
 
-const PLATFORMS = ["x", "threads", "facebook", "instagram", "linkedin"];
+const PLATFORMS = ["x", "threads", "facebook", "facebook_reel", "instagram", "linkedin"];
 const WEEKDAYS = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"];
 
 function buildSlots(body) {
@@ -288,9 +288,11 @@ router.get("/api/schedules/:id/texts", requireAuth, blockViewerRole, blockApprov
 function validateTextInput(schedule, body) {
   const platforms = Array.isArray(schedule.platforms) ? schedule.platforms : [];
   for (const platform of platforms) {
-    const key = { x: "xText", threads: "threadsText", facebook: "facebookText", instagram: "instagramText", linkedin: "linkedinText" }[platform];
+    const key = { x: "xText", threads: "threadsText", facebook: "facebookText", facebook_reel: "instagramText", instagram: "instagramText", linkedin: "linkedinText" }[platform];
     if (!body[key] || !body[key].trim()) return "text_required";
   }
+  if (platforms.includes("facebook_reel") && !body.instagramVideoUrl) return "reel_video_required";
+  if (body.instagramVideoUrl) { try { require("../lib/videoGenerator").validateReelCaption(body.instagramText); } catch (error) { return error.code || "reel_caption_invalid"; } }
   // Instagramは画像投稿（旧仕様の単発編集）・動画投稿（新仕様のリール）のいずれかが必須。
   if (platforms.includes("instagram") && !body.instagramImageUrl && !body.instagramVideoUrl) {
     return "instagram_media_required";
@@ -407,6 +409,7 @@ router.post("/api/schedules/:id/texts", requireAuth, requireVerified, blockExpir
       instagramText: body.instagramText,
       linkedinText: body.linkedinText,
       instagramImageUrl: body.instagramImageUrl,
+      instagramVideoUrl: body.instagramVideoUrl,
       sourceExcerpt: typeof body.sourceExcerpt === "string" ? body.sourceExcerpt.slice(0, 200) : "",
       createdBy: req.user.userId,
       approvalFields: approvalStore.noneApprovalFields(),

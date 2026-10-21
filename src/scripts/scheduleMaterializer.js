@@ -140,12 +140,13 @@ async function main() {
         const scheduledAt = pickRandomTimeInSlot(today, slot, now);
 
         for (const platform of platforms) {
-          if (!connectedEntry[platform]) continue; // 連携解除済みのプラットフォームは生成しない
+          if (!connectedEntry[platform === "facebook_reel" ? "facebook" : platform]) continue; // 連携解除済みのプラットフォームは生成しない
 
           const platformTextKey = {
             x: "x_text",
             threads: "threads_text",
             facebook: "facebook_text",
+            facebook_reel: "instagram_text",
             instagram: "instagram_text",
             linkedin: "linkedin_text",
           }[platform];
@@ -160,9 +161,10 @@ async function main() {
             scheduledAt: scheduledAt.toISOString(),
             containsUrl: containsUrl(content),
             imageUrl: platform === "instagram" ? text.instagram_image_url : undefined,
-            videoUrl: platform === "instagram" ? text.instagram_video_url : undefined,
+            videoUrl: ["instagram", "facebook_reel"].includes(platform) ? text.instagram_video_url : undefined,
             sourceScheduleId: schedule.id,
-            facebookPageId: platform === "facebook" ? schedule.facebook_page_id || undefined : undefined,
+            materializationKey: JSON.stringify([schedule.id,todayKeyStr,i,platform]),
+            facebookPageId: ["facebook", "facebook_reel"].includes(platform) ? schedule.facebook_page_id || undefined : undefined,
           });
           generatedPostCount += 1;
         }

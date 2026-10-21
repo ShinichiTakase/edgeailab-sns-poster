@@ -49,7 +49,7 @@ async function runSqliteMode() {
     },
     postToPlatform: async (post, lifecycle) => {
       const customer = await customerStore.getCustomerById(post.customer_id);
-      const entry = (loadStore()[customer.slug] || {})[post.platform];
+      const entry = (loadStore()[customer.slug] || {})[post.platform === "facebook_reel" ? "facebook" : post.platform];
       if (!entry) throw Object.assign(new Error("not_connected"), { retrySafe: true });
       return postToPlatform(post.platform, entry, post.content, post.image_url, post.video_url,
         post.facebook_page_id, { logError }, lifecycle);

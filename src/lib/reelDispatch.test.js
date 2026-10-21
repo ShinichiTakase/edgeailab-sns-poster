@@ -1,0 +1,12 @@
+process.env.SNS_POSTER_DATA_SOURCE='test-legacy';
+const test=require('node:test'),assert=require('node:assert/strict');
+const fb=require('./facebookPoster'),reel=require('./facebookReelPoster'),ig=require('./instagramPoster');
+let seen;
+fb.postText=async(...args)=>{seen={kind:'normal',args};return{id:'normal'};};
+reel.postReel=async(...args)=>{seen={kind:'reel',args};return{id:'reel'};};
+ig.postReel=async(...args)=>{seen={kind:'instagram',args};return{id:'ig'};};
+const{postToPlatform}=require('./scheduledPostExecutor');
+const entry={pages:[{pageId:'p1',pageAccessToken:'fake1'},{pageId:'p2',pageAccessToken:'fake2'}]};
+test('normal Facebook retains link card and selected Page',async()=>{await postToPlatform('facebook',entry,'hello https://example.test',null,'shared.mp4','p2',{});assert.equal(seen.kind,'normal');assert.equal(seen.args[0].pageId,'p2');assert.equal(seen.args[2],'https://example.test');});
+test('Facebook reel reuses selected Page token and shared video',async()=>{await postToPlatform('facebook_reel',entry,'shared',null,'shared.mp4','p2',{},{});assert.equal(seen.kind,'reel');assert.equal(seen.args[0].pageAccessToken,'fake2');assert.equal(seen.args[2],'shared.mp4');await assert.rejects(postToPlatform('facebook_reel',entry,'shared',null,'shared.mp4',null,{},{}),/facebook_page_required/);});
+test('Instagram reel keeps its own account and shared video',async()=>{await postToPlatform('instagram',{user_id:'ig',access_token:'fake'},'shared',null,'shared.mp4',null,{},{});assert.equal(seen.kind,'instagram');assert.equal(seen.args[2],'shared.mp4');});

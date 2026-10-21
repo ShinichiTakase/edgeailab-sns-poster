@@ -49,10 +49,18 @@ async function postToPlatform(platform, entry, text, imageUrl, videoUrl, faceboo
   if (platform === "linkedin") {
     return linkedinPoster.postText({ personUrn: entry.user_id, accessToken: entry.access_token }, text, extractFirstUrl(text));
   }
-  if (platform === "facebook") {
+  if (platform === "facebook" || platform === "facebook_reel") {
     const pages = entry.pages || [];
+    if (platform === "facebook_reel" && pages.length > 1 && !facebookPageId) throw Object.assign(new Error("facebook_page_required"), { retrySafe: true });
     const page = facebookPageId ? pages.find((p) => p.pageId === facebookPageId) : pages[0];
     if (!page) throw new Error("facebook_page_not_found");
+    if (platform === "facebook_reel") {
+      const fs = require("fs"), path = require("path");
+      const match = /^https:\/\/edgeailab\.net\/uploads\/([a-zA-Z0-9_-]+)\.mp4$/.exec(videoUrl || "");
+      const coverPath = match && path.join(__dirname,"../../uploads",`${match[1]}.cover.jpg`);
+      const coverBuffer = coverPath && fs.existsSync(coverPath) ? fs.readFileSync(coverPath) : null;
+      return require("./facebookReelPoster").postReel({ pageId: page.pageId, pageAccessToken: page.pageAccessToken }, text, videoUrl, {...lifecycle,coverBuffer});
+    }
     return facebookPoster.postText({ pageId: page.pageId, pageAccessToken: page.pageAccessToken }, text, extractFirstUrl(text));
   }
   if (platform === "instagram") {

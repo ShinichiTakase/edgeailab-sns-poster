@@ -6,7 +6,7 @@
 const { sendCustomerMail } = require("./customerMailer");
 const { SCHEDULED_POST_RESULT_EMAIL } = require("./emailTemplates");
 
-const PLATFORM_DISPLAY_LABELS = { x: "X", threads: "Threads", facebook: "Facebook", instagram: "Instagram", linkedin: "LinkedIn" };
+const PLATFORM_DISPLAY_LABELS = { x: "X", threads: "Threads", facebook: "Facebook", facebook_reel: "Facebook（リール）", instagram: "Instagram", linkedin: "LinkedIn" };
 
 /**
  * @param {object} params

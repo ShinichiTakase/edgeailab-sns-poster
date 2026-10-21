@@ -16,8 +16,9 @@ function createScheduledPostUnitOfWork(db, repositories, { now = () => new Date(
       db.prepare(`INSERT OR IGNORE INTO posting_logs(id,customer_id,created_by_user_id,scheduled_post_id,platform,content,
         external_post_id,account_name,posted_at,billing_period,contains_url,created_at)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
-        .run(logId, customerId, createdByUserId, scheduledPostId, platform, content || "", externalPostId,
+        .run(logId, customerId, createdByUserId, scheduledPostId, platform === "facebook_reel" ? "facebook" : platform, content || "", externalPostId,
           accountName, postedAt, billingPeriod, containsUrl ? 1 : 0, postedAt);
+      db.prepare("UPDATE posting_logs SET post_kind=? WHERE id=?").run(platform === "facebook_reel" ? "reel" : "normal",logId);
       for (const type of EFFECT_TYPES) {
         const state = type === "posting_log" ? "done" : "pending";
         db.prepare(`INSERT INTO scheduled_post_effects(scheduled_post_id,effect_type,idempotency_key,state,created_at,updated_at,completed_at)

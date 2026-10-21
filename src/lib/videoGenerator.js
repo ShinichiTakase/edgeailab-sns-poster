@@ -13,36 +13,17 @@ const { getAnthropic } = require("./anthropicClient");
 const BGM_ROOT = path.join(__dirname, "..", "..", "bgm");
 const BGM_FOLDERS = ["warm", "bright", "cyber", "digital", "fun", "intense"];
 const ANIMATIONS = ["typewriter", "endroll", "slidein"];
-const FOOTER_TEXT = "Webはプロフィールから";
+const FOOTER_TEXT = "詳細はプロフィールのリンクから";
 
 const WIDTH = 1080;
 const HEIGHT = 1920;
 const FPS = 30;
-// 尺（Instagram上での実再生時間＝OUTPUT_DURATION_SEC）が20秒になるよう、FREEZE_SEC分を
-// 差し引いた値を設定する（アニメーションが早すぎて読めないという指摘のため16→18.5に延長、
-// 2026-08-31）。本文アニメーションはactiveT（ACTIVE_FRAMES基準の進行率0〜1）で正規化されて
-// いるため、この延長だけで全アニメーションの実時間が自動的に間延びする。
-// HOLD_SECを1.5→2.5に延長した際（2026-08-31）、HOLD_FRAMESは開始のタイトル表示・終了間際の
-// 無地区間の両方に使われる（ACTIVE_FRAMES = TOTAL_FRAMES - HOLD_FRAMES*2）ため、本文アニメーション
-// の実時間（ACTIVE_FRAMES）を変えないよう、その2倍（延長分1秒×2箇所=2秒）をDURATION_SECにも
-// 加算している。2026-09-18、HOLD_SECを2.5→2.0に短縮した際も同じ理由で、短縮分0.5秒×2箇所=1秒を
-// DURATION_SECから差し引いている（20.5→19.5）。
-const DURATION_SEC = 19.5;
-const TOTAL_FRAMES = FPS * DURATION_SEC;
-// ループ再生時に不自然な切り替わりが目立たないよう、開始・終了付近はテキストなしの
-// 背景のみにする（フッターは常時表示のまま）。タイトル表示は0.5秒では短すぎるという
-// 指摘のため1.5秒に延長し（2026-08-28）、それでも読み切れないという指摘のため
-// 2.5秒に再延長した（2026-08-31）。2026-09-18、表示時間を2.0秒に調整した。
-const HOLD_SEC = 2.0;
-const HOLD_FRAMES = Math.round(HOLD_SEC * FPS);
-const ACTIVE_FRAMES = TOTAL_FRAMES - HOLD_FRAMES * 2;
-// Instagram側のシームレスなループ再生だと、次の周回が即座に始まって不自然に
-// 感じるという指摘のため、動画終了時点（最終フレーム）の状態をそのまま1.5秒間
-// 保持してから出力を終える（2026-08-30）。音声はこの追加区間より前
-// （DURATION_SEC基準のafade）でフェードアウト済みなので、追加区間は無音になる。
-const FREEZE_SEC = 1.5;
-const FREEZE_FRAMES = Math.round(FREEZE_SEC * FPS);
-const OUTPUT_DURATION_SEC = DURATION_SEC + FREEZE_SEC;
+// Conservative common limit from the retrieved Meta official sample (2026-10-15).
+const MAX_DURATION_SEC = 60;
+const HOLD_SEC = 2;
+const HOLD_FRAMES = FPS * HOLD_SEC;
+const FREEZE_SEC = 4;
+const FREEZE_FRAMES = FPS * FREEZE_SEC;
 
 const FONT_FAMILY = "NotoSansCJK";
 let fontRegistered = false;
@@ -50,6 +31,7 @@ function ensureFontRegistered() {
   if (fontRegistered) return;
   const candidates = [
     "/usr/share/fonts/noto/NotoSansCJK-Regular.ttc",
+    "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
     "/usr/share/fonts/noto-cjk/NotoSansCJK-Regular.ttc",
   ];
   const fontPath = candidates.find((p) => fs.existsSync(p));
@@ -184,9 +166,10 @@ function pickBgmFile(bgmFolder) {
 
 function wrapCaption(ctx, text, maxWidth, fontSize) {
   ctx.font = `bold ${fontSize}px ${FONT_FAMILY}`;
-  const paragraphs = text.split(/\n+/).filter(Boolean);
+  const paragraphs = text.split(/\r?\n/);
   const lines = [];
   for (const para of paragraphs) {
+    if (!para) { lines.push(""); continue; }
     let current = "";
     for (const ch of para) {
       const test = current + ch;
@@ -200,27 +183,6 @@ function wrapCaption(ctx, text, maxWidth, fontSize) {
     if (current) lines.push(current);
   }
   return lines;
-}
-
-function fitCaption(ctx, text, maxWidth, maxHeight) {
-  // キャプション文字が小さすぎるとの指摘のため、初期サイズ・最小サイズとも約1.5倍にした
-  // （68→102, 32→48）。CAPTION_AREAの高さ（HEIGHT-840=1080px）には十分な余裕があるため、
-  // 収まらない場合の縮小ロジック（このループ）はそのまま機能する。
-  let fontSize = 102;
-  const minSize = 48;
-  let lines = wrapCaption(ctx, text, maxWidth, fontSize);
-  // 行間は1.45倍だったが、やや長めのキャプションでminSizeに張り付いたまま
-  // 文字が小さいまま表示される事例があったため1.3倍に詰め、同じ高さでより
-  // 多くの行数を許容できるようにした（CAPTION_AREA拡張とあわせての対応）。
-  let lineHeight = Math.round(fontSize * 1.3);
-  while (fontSize > minSize && lines.length * lineHeight > maxHeight) {
-    fontSize -= 6;
-    lines = wrapCaption(ctx, text, maxWidth, fontSize);
-    lineHeight = Math.round(fontSize * 1.3);
-  }
-  // 極端に長い文章は表示しきれないため、収まる行数までで打ち切る（保存前にプレビューできるため許容）。
-  const maxLines = Math.max(1, Math.floor(maxHeight / lineHeight));
-  return { lines: lines.slice(0, maxLines), fontSize, lineHeight };
 }
 
 function easeOutCubic(t) {
@@ -244,7 +206,7 @@ function extractTitleSource(captionText) {
 // フォントサイズは小さく読みにくいという指摘のため、初期・最小サイズとも一回り
 // 大きくした（108→120, 56→64、2026-09-18）。
 function fitTitle(ctx, text, maxWidth) {
-  let fontSize = 120;
+  let fontSize = 72;
   const minSize = 64;
   let lines = wrapCaption(ctx, text, maxWidth, fontSize);
   let lineHeight = Math.round(fontSize * 1.3);
@@ -264,32 +226,27 @@ function fitTitle(ctx, text, maxWidth) {
 // holdT: 0（開始）→1（ホールド区間の終端＝本文アニメーション開始点）。終盤30%
 // でフェードアウトし、本文アニメーションが始まる時点では完全に透明になっているようにする。
 function drawTitle(ctx, { lines, fontSize, lineHeight, textColor, holdT }) {
-  const fadeStart = 0.7;
-  const opacity = holdT < fadeStart ? 1 : Math.max(0, 1 - (holdT - fadeStart) / (1 - fadeStart));
-
   ctx.save();
-  ctx.globalAlpha = opacity;
+  const fadeStart = 0.72;
+  ctx.globalAlpha = holdT <= fadeStart ? 1 : Math.max(0, 1 - (holdT - fadeStart) / (1 - fadeStart));
   ctx.font = `bold ${fontSize}px ${FONT_FAMILY}`;
   ctx.fillStyle = textColor;
   ctx.textAlign = "center";
   ctx.textBaseline = "middle";
   const blockHeight = lines.length * lineHeight;
-  // 「画面の中央」という要件のため、本文用のCAPTION_AREA（フッター分だけ下マージンを
-  // 広く取った領域）ではなく、フレーム全体の中央（HEIGHT/2）を基準にする。
-  const startY = HEIGHT / 2 - blockHeight / 2 + lineHeight / 2;
+  const startY = (CAPTION_AREA.top + CAPTION_AREA.bottom) / 2 - blockHeight / 2 + lineHeight / 2;
   lines.forEach((line, idx) => {
-    ctx.fillText(line, WIDTH / 2, startY + idx * lineHeight);
+    ctx.fillText(line, 510, startY + idx * lineHeight);
   });
   ctx.restore();
 }
 
 // ---------- フレーム描画 ----------
 
-// 上下マージンを420→320/360に詰め、キャプションが使える高さを1080→1240pxに拡張した
-// （フォントが最小サイズに張り付いたまま表示される事例の対策。フッター(FOOTER_Y=1790)
-// との間隔は十分確保できている）。
-const CAPTION_AREA = { top: 320, bottom: HEIGHT - 360, left: 90, right: WIDTH - 90 };
-const FOOTER_Y = HEIGHT - 130;
+// タイトルは冒頭だけ表示して本文開始時に消えるため、本文はその後に中央の広い領域を使える。
+// フッターとの間隔は維持する。
+const CAPTION_AREA = { top: 320, bottom: 1400, left: 120, right: 900 };
+const FOOTER_Y = 1490;
 
 // CSSのbackground-size: coverと同じ考え方で、フレーム全体を隙間なく覆うよう画像を
 // 拡大・中央クロップする描画パラメータを1回だけ計算する（毎フレーム同じ静止画のため）。
@@ -309,14 +266,12 @@ function drawBackgroundImage(ctx, image, draw) {
   ctx.fillRect(0, 0, WIDTH, HEIGHT);
 }
 
-function drawFooter(ctx, textColor) {
-  ctx.save();
-  ctx.globalAlpha = 1;
-  ctx.font = `bold 52px ${FONT_FAMILY}`;
-  ctx.fillStyle = textColor;
-  ctx.textAlign = "center";
-  ctx.textBaseline = "middle";
-  ctx.fillText(FOOTER_TEXT, WIDTH / 2, FOOTER_Y);
+function drawFooter(ctx) {
+  ctx.save(); ctx.globalAlpha = 1;
+  ctx.fillStyle = "#111827"; ctx.fillRect(100, 1430, 820, 120);
+  ctx.font = `bold 50px ${FONT_FAMILY}`; ctx.fillStyle = "#ffffff";
+  ctx.textAlign = "center"; ctx.textBaseline = "middle";
+  ctx.fillText(FOOTER_TEXT, 510, FOOTER_Y);
   ctx.restore();
 }
 
@@ -324,10 +279,10 @@ function drawTypewriter(ctx, { lines, fontSize, lineHeight, textColor, activeT }
   const totalChars = lines.reduce((n, l) => n + l.length, 0);
   // 文字送りが早すぎて読めないという指摘のため、全体の70%→85%の時間をかけて
   // 出現させるよう緩めた（2026-08-31）。
-  const revealT = Math.min(1, activeT / 0.85);
+  const revealT = Math.min(1, activeT);
   const revealCount = Math.round(totalChars * revealT);
   let opacity = 1;
-  if (activeT > 0.9) opacity = Math.max(0, 1 - (activeT - 0.9) / 0.1);
+
 
   ctx.save();
   ctx.globalAlpha = opacity;
@@ -341,7 +296,7 @@ function drawTypewriter(ctx, { lines, fontSize, lineHeight, textColor, activeT }
   lines.forEach((line, idx) => {
     if (remaining <= 0) return;
     const shown = line.slice(0, Math.max(0, remaining));
-    ctx.fillText(shown, WIDTH / 2, startY + idx * lineHeight);
+    ctx.fillText(shown, 510, startY + idx * lineHeight);
     remaining -= line.length;
   });
   ctx.restore();
@@ -354,16 +309,6 @@ function drawSlideIn(ctx, { lines, fontSize, lineHeight, textColor, activeT }) {
     const t = easeOutCubic(activeT / 0.15);
     opacity = t;
     offsetY = (1 - t) * 70;
-  } else if (activeT > 0.85) {
-    const t = (activeT - 0.85) / 0.15;
-    opacity = Math.max(0, 1 - t);
-    offsetY = -t * 40;
-  } else {
-    // フェードイン・アウトの間（全体の70%）は完全に静止して見えていたため
-    // （シークバーを動かしても変化がないという指摘の実体）、ごく緩やかな
-    // 上下の揺れを常時加えて静止画に見えないようにする。
-    const driftT = (activeT - 0.15) / 0.7;
-    offsetY = Math.sin(driftT * Math.PI * 2) * 8;
   }
 
   ctx.save();
@@ -375,15 +320,14 @@ function drawSlideIn(ctx, { lines, fontSize, lineHeight, textColor, activeT }) {
   const blockHeight = lines.length * lineHeight;
   const startY = (CAPTION_AREA.top + CAPTION_AREA.bottom) / 2 - blockHeight / 2 + lineHeight / 2 + offsetY;
   lines.forEach((line, idx) => {
-    ctx.fillText(line, WIDTH / 2, startY + idx * lineHeight);
+    ctx.fillText(line, 510, startY + idx * lineHeight);
   });
   ctx.restore();
 }
 
 function drawEndroll(ctx, { lines, fontSize, lineHeight, textColor, activeT }) {
-  const blockHeight = lines.length * lineHeight;
-  const startY = CAPTION_AREA.bottom + blockHeight / 2;
-  const endY = CAPTION_AREA.top - blockHeight / 2;
+  const startY = CAPTION_AREA.bottom + lineHeight / 2;
+  const endY = Math.min(CAPTION_AREA.top + lineHeight / 2, CAPTION_AREA.bottom - lineHeight / 2 - (lines.length - 1) * lineHeight);
   const y = startY + (endY - startY) * activeT;
 
   ctx.save();
@@ -396,7 +340,7 @@ function drawEndroll(ctx, { lines, fontSize, lineHeight, textColor, activeT }) {
   ctx.textAlign = "center";
   ctx.textBaseline = "middle";
   lines.forEach((line, idx) => {
-    ctx.fillText(line, WIDTH / 2, y + idx * lineHeight);
+    ctx.fillText(line, 510, y + idx * lineHeight);
   });
   ctx.restore();
 }
@@ -414,16 +358,25 @@ const DRAWERS = { typewriter: drawTypewriter, endroll: drawEndroll, slidein: dra
  *   未指定の場合は従来通りAIが選んだアクセントカラーの単色背景になる。
  * @returns {Promise<{accentColorHex: string, textColor: string, contrastRatio: number|null, animation: string, bgmFolder: string, bgmFile: string}>}
  */
-async function renderVideo({ captionText, outPath, signal, backgroundImagePath }) {
+async function renderVideo({ captionText, outPath, signal, backgroundImagePath, animation: animationOverride, style: styleOverride, frameDirectory }) {
   ensureFontRegistered();
-  captionText = stripEmoji(captionText);
+  let plan = validateReelCaption(captionText, animationOverride);
+  if (!animationOverride) {
+    const choices = ANIMATIONS.flatMap(a => { try { return [validateReelCaption(captionText,a)]; } catch { return []; } });
+    plan = choices[Math.floor(Math.random()*choices.length)];
+  }
+  const { lines, fontSize, lineHeight, animation, activeSeconds } = plan;
+  const ACTIVE_FRAMES = Math.ceil(activeSeconds * FPS);
+  const TOTAL_FRAMES = HOLD_FRAMES + ACTIVE_FRAMES;
+  const DURATION_SEC = TOTAL_FRAMES / FPS;
+  const OUTPUT_DURATION_SEC = DURATION_SEC + FREEZE_SEC;
 
   // 体感速度の遅さの原因切り分け調査用（2026-08-20）。Claude API呼び出し（配色・BGM判定）と
   // 実際のffmpeg/canvasレンダリングの所要時間を分けて記録する。
   const __styleT0 = Date.now();
   let style;
   try {
-    style = await pickVideoStyle({ captionText });
+    style = styleOverride || await pickVideoStyle({ captionText });
   } catch (err) {
     console.error(`[videoGenerator] pickVideoStyle failed, using fallback style:`, err.message);
     style = pickFallbackStyle();
@@ -437,7 +390,7 @@ async function renderVideo({ captionText, outPath, signal, backgroundImagePath }
   const { textColor, contrastRatio: ratio } = backgroundImagePath
     ? { textColor: "#ffffff", contrastRatio: null }
     : pickTextColor(style.accentColorHex);
-  const animation = ANIMATIONS[Math.floor(Math.random() * ANIMATIONS.length)];
+
   const bgmFilePath = pickBgmFile(style.bgmFolder);
   const backgroundImage = backgroundImagePath ? await loadImage(backgroundImagePath) : null;
   const backgroundDraw = backgroundImage ? computeCoverDraw(backgroundImage, WIDTH, HEIGHT) : null;
@@ -445,14 +398,9 @@ async function renderVideo({ captionText, outPath, signal, backgroundImagePath }
 
   const canvas = createCanvas(WIDTH, HEIGHT);
   const ctx = canvas.getContext("2d");
-  const { lines, fontSize, lineHeight } = fitCaption(
-    ctx,
-    captionText,
-    CAPTION_AREA.right - CAPTION_AREA.left,
-    CAPTION_AREA.bottom - CAPTION_AREA.top
-  );
   const drawCaption = DRAWERS[animation];
   const titleFit = fitTitle(ctx, extractTitleSource(captionText), CAPTION_AREA.right - CAPTION_AREA.left);
+  titleFit.fontSize = Math.min(titleFit.fontSize, 72); titleFit.lineHeight = 90;
 
   const __renderT0 = Date.now();
   await new Promise((resolve, reject) => {
@@ -480,9 +428,10 @@ async function renderVideo({ captionText, outPath, signal, backgroundImagePath }
         "-c:v", "libx264",
         "-pix_fmt", "yuv420p",
         "-profile:v", "main",
+        "-threads", "2",
         "-c:a", "aac",
         "-b:a", "128k",
-        "-af", `afade=t=in:st=0:d=1,afade=t=out:st=${DURATION_SEC - 1}:d=1`,
+        "-af", `loudnorm=I=-16:TP=-1.5:LRA=7:linear=true,afade=t=in:st=0:d=1,afade=t=out:st=${DURATION_SEC - 1}:d=1`,
         "-t", String(OUTPUT_DURATION_SEC),
         "-movflags", "+faststart",
         "-y",
@@ -524,16 +473,21 @@ async function renderVideo({ captionText, outPath, signal, backgroundImagePath }
             ctx.fillRect(0, 0, WIDTH, HEIGHT);
           }
 
+          // Opaque panel guarantees contrast even over a bright photograph.
+          ctx.fillStyle = "#111827"; ctx.fillRect(100, CAPTION_AREA.top - 20, 820, CAPTION_AREA.bottom - CAPTION_AREA.top + 40);
           if (frame < HOLD_FRAMES) {
-            // 開始直後HOLD_SEC秒間（0フレーム目＝プロフィールグリッドのサムネイルを含む）は
-            // タイトルを画面中央に静止表示し、区間の終盤でフェードアウトする。
-            const holdT = frame / HOLD_FRAMES;
-            drawTitle(ctx, { ...titleFit, textColor, holdT });
-          } else if (frame < TOTAL_FRAMES - HOLD_FRAMES) {
-            const activeT = (frame - HOLD_FRAMES) / ACTIVE_FRAMES;
-            drawCaption(ctx, { lines, fontSize, lineHeight, textColor, activeT });
+            const holdT = frame / Math.max(1, HOLD_FRAMES - 1);
+            drawTitle(ctx, { ...titleFit, textColor: "#ffffff", holdT });
+          } else {
+            const activeT = Math.min(1, (frame - HOLD_FRAMES) / Math.max(1, ACTIVE_FRAMES - 1));
+            drawCaption(ctx, { lines, fontSize, lineHeight, textColor: "#ffffff", activeT });
           }
-          drawFooter(ctx, textColor);
+          drawFooter(ctx);
+          if (frameDirectory && [0, HOLD_FRAMES, Math.floor(TOTAL_FRAMES/2), TOTAL_FRAMES-1].includes(frame)) {
+            fs.mkdirSync(frameDirectory, { recursive: true });
+            fs.writeFileSync(path.join(frameDirectory, `${animation}-${frame}.png`), canvas.toBuffer("image/png"));
+          }
+          if (frame === 0) fs.writeFileSync(outPath.replace(/\.mp4$/, ".cover.jpg"), canvas.toBuffer("image/jpeg"));
 
           const imageData = ctx.getImageData(0, 0, WIDTH, HEIGHT);
           lastBuf = Buffer.from(imageData.data.buffer, imageData.data.byteOffset, imageData.data.byteLength);
@@ -565,12 +519,34 @@ async function renderVideo({ captionText, outPath, signal, backgroundImagePath }
 
   return {
     accentColorHex: style.accentColorHex,
-    textColor,
-    contrastRatio: ratio === null ? null : Number(ratio.toFixed(2)),
-    animation,
+    textColor: "#ffffff",
+    contrastRatio: Number(contrastRatio("#111827", "#ffffff").toFixed(2)),
+    animation, durationSeconds: OUTPUT_DURATION_SEC,
     bgmFolder: style.bgmFolder,
     bgmFile: path.basename(bgmFilePath),
   };
+}
+
+function validateReelCaption(text, requestedAnimation) {
+  function fail(code) { throw Object.assign(new Error(code), { code }); }
+  if (typeof text !== "string" || !text.trim()) fail("reel_caption_required");
+  if (text.length > 2200) fail("reel_caption_too_long");
+  EMOJI_PATTERN.lastIndex = 0;
+  if (EMOJI_PATTERN.test(text)) fail("reel_emoji_unsupported");
+  ensureFontRegistered();
+  const ctx = createCanvas(WIDTH, HEIGHT).getContext("2d");
+  const fontSize = 60, lineHeight = 84;
+  const lines = wrapCaption(ctx, text, CAPTION_AREA.right - CAPTION_AREA.left, fontSize);
+  const fits = lines.length * lineHeight <= CAPTION_AREA.bottom - CAPTION_AREA.top;
+  const animation = requestedAnimation || "endroll";
+  if (!ANIMATIONS.includes(animation)) fail("reel_animation_invalid");
+  if (!fits && animation !== "endroll") fail("reel_use_endroll_or_shorten");
+  const startY = CAPTION_AREA.bottom + lineHeight/2;
+  const endY = Math.min(CAPTION_AREA.top+lineHeight/2, CAPTION_AREA.bottom-lineHeight/2-(lines.length-1)*lineHeight);
+  const chars = Array.from(text).length;
+  const activeSeconds = animation === "endroll" ? Math.max(6,(startY-endY)/50,chars/8) : animation === "typewriter" ? Math.max(6,chars/8) : Math.max(6,chars/6+2);
+  if (HOLD_SEC + activeSeconds + FREEZE_SEC > MAX_DURATION_SEC) fail("reel_caption_too_long");
+  return { lines, fontSize, lineHeight, animation, activeSeconds, durationSeconds: HOLD_SEC+activeSeconds+FREEZE_SEC };
 }
 
 class DOMExceptionLike extends Error {
@@ -580,4 +556,4 @@ class DOMExceptionLike extends Error {
   }
 }
 
-module.exports = { renderVideo, pickVideoStyle, pickTextColor, contrastRatio };
+module.exports = { validateReelCaption, renderVideo, pickVideoStyle, pickTextColor, contrastRatio };

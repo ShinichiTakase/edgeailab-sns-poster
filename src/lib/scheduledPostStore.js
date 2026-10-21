@@ -7,7 +7,7 @@ const { microcmsFetch } = require("./microcms");
 
 // microCMSのselectフィールド側の有効値は小文字のキーそのもの（"X"等の大文字表示ラベルは
 // 無効値としてエラーなく空配列に落とされるため注意。実測で確認済み）。
-const PLATFORM_LABELS = { x: "x", threads: "threads", facebook: "facebook", instagram: "instagram", linkedin: "linkedin" };
+const PLATFORM_LABELS = { x: "x", threads: "threads", facebook: "facebook", facebook_reel: "facebook_reel", instagram: "instagram", linkedin: "linkedin" };
 
 // 予約投稿の実行エンジン（scheduledPostRunner.js）をデプロイした時刻（固定値）。過去にこの
 // 時刻より前のscheduled_atを持つpending/failed予約は、今後もこのエンジン・再試行エンジンの
