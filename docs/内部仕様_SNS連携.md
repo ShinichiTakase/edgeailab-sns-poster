@@ -502,6 +502,11 @@ SNS account/tokenの唯一のruntime sourceはSQLiteの `social_accounts`、`soc
 
 `orphanSnsTokenCheck.js` はSQLite内の顧客relation、active accountと解約顧客の不整合、external account重複、token expiry形式、暗号文の復号可能性を監査する。自動修正および外部SNS API照会は行わない。
 
+
+## 2026-10-15 隔離実装追補（本番未反映）
+
+Facebook Pageリールと共通動画については [内部仕様_Facebookリール](内部仕様_Facebookリール.md) を参照。この追補の対象範囲では、従来のInstagram専用・固定21秒・本文切捨ての記載を置き換える。SQLite 006追加カラムと公開要求の永続化、配備・切戻し条件は内部仕様を参照。
+
 ## 重複検知・再認可・Xトークンリフレッシュの仕様（2026-10-22修正）
 
 ### 重複検知（SQLite版 `findDuplicateOwner`）

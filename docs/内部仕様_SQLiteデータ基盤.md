@@ -44,3 +44,8 @@ WALファイルの単純copyは禁止し、SQLite Online Backup APIを使う。b
 - legacy `json/` は移行証跡・rollback archiveとして保持する。通常runtimeの業務データ参照・更新には使用しない。
 - 管理統計cacheは `admin_stats_cache` に保存する。一般runtime logは `/app/logs` に保存し、SQLite `audit_logs` は業務監査用途として区別する。
 - SNS連携整合性の日次監査はSQLiteの `customers` / `social_accounts` と暗号化tokenの復号可能性を検査する。外部SNS APIおよびlegacy token JSONは参照しない。
+
+
+## 2026-10-15 隔離実装追補（本番未反映）
+
+Facebook Pageリールと共通動画については [内部仕様_Facebookリール](内部仕様_Facebookリール.md) を参照。この追補の対象範囲では、従来のInstagram専用・固定21秒・本文切捨ての記載を置き換える。SQLite 006追加カラムと公開要求の永続化、配備・切戻し条件は内部仕様を参照。
