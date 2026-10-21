@@ -2,10 +2,10 @@ const test = require("node:test");
 const assert = require("node:assert/strict");
 const { requireMatchingSlugParam } = require("./oauthSlugGuard");
 
-function run(query, customer) {
+function run(query, customer, originalUrl = "/oauth/x/authorize") {
   const out = { next: false };
   const res = { status(c) { out.status = c; return this; }, send(b) { out.body = b; return this; } };
-  requireMatchingSlugParam("x")({ query, customer }, res, () => { out.next = true; });
+  requireMatchingSlugParam("x")({ query, customer, originalUrl }, res, () => { out.next = true; });
   return out;
 }
 const customer = { id: "idA", slug: "slug-a" };
@@ -22,4 +22,17 @@ test("mismatch / empty / array is blocked with message", () => {
     assert.equal(r.status, 403);
     assert.match(r.body, /別の契約用/);
   }
+});
+
+test("mismatch page has a logout-and-relogin button carrying a safe returnTo", () => {
+  const url = "/oauth/x/authorize?slug=slug-b";
+  const r = run({ slug: "slug-b" }, customer, url);
+  assert.match(r.body, /ログアウトして対象契約でログインする/);
+  assert.match(r.body, /data-return-to="%2Foauth%2Fx%2Fauthorize%3Fslug%3Dslug-b"/);
+  assert.match(r.body, /\/api\/auth\/logout/);
+});
+test("mismatch page never embeds an unsafe originalUrl", () => {
+  const r = run({ slug: "x" }, customer, '/oauth/x/authorize?"><script>alert(1)</script>');
+  assert.match(r.body, /data-return-to=""/);
+  assert.doesNotMatch(r.body, /alert\(1\)/);
 });

@@ -6,6 +6,7 @@ const pkceStore = require("../lib/pkceStore");
 const { requireAuth, blockExpiredTrial, blockViewerRoleRedirect, blockEditorRoleRedirect, blockApproverRoleRedirect } = require("../middleware/requireAuth");
 const { requireSnsConnectionAvailable } = require("../middleware/snsConnectionGuard");
 const { requireMatchingSlugParam } = require("../middleware/oauthSlugGuard");
+const { redirectIfUnauthenticated } = require("../middleware/redirectIfUnauthenticated");
 
 const router = express.Router();
 
@@ -40,7 +41,7 @@ const USERS_ME_URL = "https://api.x.com/2/users/me";
 // 使うには再連携（このOAuthフローのやり直し）が必要（refresh tokenだけでは新スコープは付与されない）。
 const SCOPE = "tweet.read tweet.write users.read offline.access media.write";
 
-router.get("/oauth/x/authorize", requireAuth, blockExpiredTrial, blockViewerRoleRedirect, blockEditorRoleRedirect, blockApproverRoleRedirect, requireSnsConnectionAvailable("x"), requireMatchingSlugParam("x"), (req, res) => {
+router.get("/oauth/x/authorize", redirectIfUnauthenticated, requireAuth, blockExpiredTrial, blockViewerRoleRedirect, blockEditorRoleRedirect, blockApproverRoleRedirect, requireSnsConnectionAvailable("x"), requireMatchingSlugParam("x"), (req, res) => {
   const slug = req.customer.id;
 
   const codeVerifier = crypto.randomBytes(64).toString("base64url");

@@ -517,3 +517,8 @@ SNS account/tokenの唯一のruntime sourceはSQLiteの `social_accounts`、`soc
 - HTTP `400`/`401`（invalid_grantか否かを問わず失効の可能性が高いとみなす）のみ即時に「再認可が必要です」メール（再認可リンク付き）を送る。同一の失敗状態では再送しない。
 - それ以外の失敗は顧客単位の連続失敗回数を`data/x-refresh-failures.json`（`X_REFRESH_STATE_PATH`で変更可）に保持し、3回連続（約45分）で1度だけ「一時的に失敗」メール（再認可リンクなし）を送る。成功でカウンタと通知済みフラグをリセットする。
 - 新refresh_tokenはXの応答を受けた直後に保存する。ログ・メールにはcause.code、HTTPステータス、本文先頭200文字を出し、トークン値は出さない。
+
+### 未ログインでOAuth開始URLを開いた場合（returnTo）
+- `/oauth/x/authorize`・`/oauth/{threads,instagram,linkedin,facebook}/start`は、未ログイン（Cookieなし/JWT無効）のとき401 JSONではなく`/login.html?returnTo=<元のURL>`へ302する（`middleware/redirectIfUnauthenticated.js`）。ログイン済みなら従来どおり`requireAuth`以降が処理する。
+- `login.html`はログイン成功後、`returnTo`が安全なら元のURLへ戻る。判定（`lib/returnTo.js`と`login.html`内の`isSafeReturnTo`で同一）: `/`で始まり、`//`と`\`を含まず、`/oauth/(x/authorize|(threads|instagram|linkedin|facebook)/start)`＋任意のクエリ（英数字と`_-.~%=&`のみ）に一致するもののみ。それ以外は従来の遷移先（dashboard/approval）。
+- `?slug=`不一致の403画面には「ログアウトして対象契約でログインする」ボタンがあり、ログアウト後に同じ認可URLを`returnTo`としてログイン画面へ送る。
