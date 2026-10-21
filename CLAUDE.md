@@ -14,12 +14,40 @@
 このプロジェクト単独ではnginx-proxy/acme-companionを立てない）。
 
 ## デプロイ手順（必須）
-コードを変更した場合、以下の順で必ず実行すること：
-1. ローカル編集の反映
-2. `cd /opt/project/deploy/xserver-vps && docker compose build sns-poster`
-   （このディレクトリのdocker-compose.ymlではなく、中央composeを再ビルドする）
-3. `docker compose up -d sns-poster`
-4. 動作確認（`docker compose logs -f sns-poster`）
+本番イメージは中央composeの`image:`タグで指定しており、`docker compose build`では作れない
+（2026-10-22、未コミット変更を含むイメージで稼働していた事実が判明）。
+コードを変更した場合、以下の順で実施する（反映前に必ずユーザーの承認を取る）：
+
+1. 変更をコミットする。ビルドは**必ずクリーンなコミットのworktreeから**行う
+   （`git worktree add --detach <dir> <commit>`。作業ツリーの未コミット変更・未追跡ファイルを
+   イメージに入れないため）。
+2. ビルド前に、現行の本番イメージの`/app/src`・`config`・`bgm`・`assets`・`package.json`・
+   `package-lock.json`、およびDockerfile（イメージ内には無いため`docker history`と
+   `git log -- Dockerfile`で照合）をworktreeとdiffし、差分が今回の変更だけであることを確認する。
+   それ以外の差分があれば反映せず原因を確認する。本番SQLiteの適用済みマイグレーション
+   （`schema_migrations`のchecksum）と、新イメージの`src/db/migrations`も一致を確認する。
+3. 全テストをworktreeで実行する。
+4. `docker build --build-arg APP_REVISION=<ビルド元のコミットハッシュ> -t edgeailab/sns-poster:<新タグ> <worktree>`。
+   **`APP_REVISION`には必ずコミットハッシュを埋め込む**（`unknown`のまま運用しない）。
+   ビルド後に`docker run --rm --entrypoint sh <新イメージ> -c 'echo $APP_REVISION; ls src/db/migrations'`で確認する。
+5. 反映前に、本番SQLiteのオンラインバックアップ（`src/db/backupCli.js`、
+   `data/backups/`配下に日時入りの名前）と`docker-compose.yml`のバックアップを取る
+   （`PRAGMA integrity_check`で検証）。直近の予約投稿時刻と重ならないタイミングを選ぶ。
+6. `/opt/project/deploy/xserver-vps/docker-compose.yml`の`sns-poster`と`sns-poster-x-refresh`の
+   `image:`を新タグにする（cron用の他サービスの扱いは次節）。
+7. `docker compose up -d --force-recreate sns-poster`、動作確認
+   （`docker exec xsvps-sns-poster printenv APP_REVISION`が一致すること、起動ログ、HTTP応答）。
+   失敗したらcomposeのバックアップを戻して旧タグで再作成する。
+
+## cron用サービスを新タグに揃える際の注意
+`profiles: manual`のcron用サービスは、旧タグのままだと旧コードで動き続ける。
+`image:`を差し替えるだけで、次回のcron起動から新タグが使われる（再作成は不要）。
+差し替えは1サービスずつ行い、次回実行のログを確認してから進める。
+
+- `sns-poster-x-surcharge-schedule-apply`: Stripe課金の自動化のため、**最後に**切り替える。
+- `sns-poster-scheduled-post-runner`（と`-retry-runner`）: 予約投稿の実行時刻の**合間**に切り替える。
+- `sns-poster-orphan-sns-token-check`: `findDuplicateOwner`周辺のSQLiteアダプタ変更の影響を、
+  読み取り専用の挙動確認をしてから切り替える。
 
 ## トライアル期間（内部値と表示値の分離）
 `customers.trialEndsAt`（DB上の値）は、顧客に案内する「表向き30日」ではなく
