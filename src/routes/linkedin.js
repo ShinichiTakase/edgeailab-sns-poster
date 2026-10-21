@@ -5,6 +5,7 @@ const { checkTrialHistoryHit, recordConnectionForHistory } = require("../lib/tri
 const pkceStore = require("../lib/pkceStore");
 const { requireAuth, blockExpiredTrial, blockViewerRoleRedirect, blockEditorRoleRedirect, blockApproverRoleRedirect } = require("../middleware/requireAuth");
 const { requireSnsConnectionAvailable } = require("../middleware/snsConnectionGuard");
+const { requireMatchingSlugParam } = require("../middleware/oauthSlugGuard");
 
 const router = express.Router();
 
@@ -38,7 +39,7 @@ const USERINFO_URL = "https://api.linkedin.com/v2/userinfo";
 // openid/profileはOIDC userinfoエンドポイントからperson urn（sub）を取得するために必要。
 const SCOPE = "openid profile w_member_social";
 
-router.get("/oauth/linkedin/start", requireAuth, blockExpiredTrial, blockViewerRoleRedirect, blockEditorRoleRedirect, blockApproverRoleRedirect, requireSnsConnectionAvailable("linkedin"), (req, res) => {
+router.get("/oauth/linkedin/start", requireAuth, blockExpiredTrial, blockViewerRoleRedirect, blockEditorRoleRedirect, blockApproverRoleRedirect, requireSnsConnectionAvailable("linkedin"), requireMatchingSlugParam("linkedin"), (req, res) => {
   const slug = req.customer.id;
   const state = crypto.randomBytes(24).toString("hex");
   pkceStore.put(state, { slug, platform: "linkedin" });

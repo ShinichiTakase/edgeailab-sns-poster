@@ -13,6 +13,7 @@ const {
 const { recordNewIdentifiers } = require("../lib/snsHistoryStore");
 const { requireAuth, blockExpiredTrial, blockViewerRoleRedirect, blockEditorRoleRedirect, blockApproverRoleRedirect } = require("../middleware/requireAuth");
 const { requireSnsConnectionAvailable } = require("../middleware/snsConnectionGuard");
+const { requireMatchingSlugParam } = require("../middleware/oauthSlugGuard");
 
 const router = express.Router();
 
@@ -69,7 +70,7 @@ const GRAPH_URL = `https://graph.instagram.com/${GRAPH_API_VERSION}`;
 
 // 動作確認・実運用の両方でこのエンドポイントから開始する。
 // state を発行してslug（クライアント識別子）と紐付け、Facebook/Threadsの実装と同じ方式でコールバックへ受け渡す。
-router.get("/oauth/instagram/start", requireAuth, blockExpiredTrial, blockViewerRoleRedirect, blockEditorRoleRedirect, blockApproverRoleRedirect, requireSnsConnectionAvailable("instagram"), (req, res) => {
+router.get("/oauth/instagram/start", requireAuth, blockExpiredTrial, blockViewerRoleRedirect, blockEditorRoleRedirect, blockApproverRoleRedirect, requireSnsConnectionAvailable("instagram"), requireMatchingSlugParam("instagram"), (req, res) => {
   const slug = req.customer.id;
 
   const state = crypto.randomBytes(24).toString("hex");

@@ -5,6 +5,7 @@ const { checkTrialHistoryHit, recordConnectionForHistory } = require("../lib/tri
 const pkceStore = require("../lib/pkceStore");
 const { requireAuth, blockExpiredTrial, blockViewerRoleRedirect, blockEditorRoleRedirect, blockApproverRoleRedirect } = require("../middleware/requireAuth");
 const { requireSnsConnectionAvailable } = require("../middleware/snsConnectionGuard");
+const { requireMatchingSlugParam } = require("../middleware/oauthSlugGuard");
 
 const router = express.Router();
 
@@ -35,7 +36,7 @@ const SCOPE = "threads_basic,threads_content_publish";
 
 // requireAuthでログイン中の顧客のみ開始でき、req.customer.id（microCMSの顧客レコードid）を
 // slug（json/client_tokens.jsonのキー）としてstateに紐付ける。Facebook/Instagramと同じ方式。
-router.get("/oauth/threads/start", requireAuth, blockExpiredTrial, blockViewerRoleRedirect, blockEditorRoleRedirect, blockApproverRoleRedirect, requireSnsConnectionAvailable("threads"), (req, res) => {
+router.get("/oauth/threads/start", requireAuth, blockExpiredTrial, blockViewerRoleRedirect, blockEditorRoleRedirect, blockApproverRoleRedirect, requireSnsConnectionAvailable("threads"), requireMatchingSlugParam("threads"), (req, res) => {
   const slug = req.customer.id;
   const state = crypto.randomBytes(24).toString("hex");
   pkceStore.put(state, { slug, platform: "threads" });

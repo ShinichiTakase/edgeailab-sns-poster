@@ -501,3 +501,19 @@ Meta審査（App Review）自体はまだ完了しておらず現在もDevモー
 SNS account/tokenの唯一のruntime sourceはSQLiteの `social_accounts`、`social_account_pages`、`social_account_history` である。tokenはAES-256-GCM暗号文として保持する。`json/client_tokens.json` と `json/sns_history.json` は移行前archiveであり、接続表示、重複アカウント判定、token refresh、投稿、孤立判定には使用しない。
 
 `orphanSnsTokenCheck.js` はSQLite内の顧客relation、active accountと解約顧客の不整合、external account重複、token expiry形式、暗号文の復号可能性を監査する。自動修正および外部SNS API照会は行わない。
+
+## 重複検知・再認可・Xトークンリフレッシュの仕様（2026-10-22修正）
+
+### 重複検知（SQLite版 `findDuplicateOwner`）
+- `sqliteStoreAdapters.js`の`findDuplicateOwner(platform, identifiers, exclude)`は、`all()`（slug/idの二重キー）ではなく`social_accounts`を`customer_id`で直接比較する。`exclude`はslugでもidでもよく、顧客を解決したうえで「自分以外の顧客」の未解除行だけを重複とみなす（自分自身の再認可は重複にならずUPSERT=トークン更新）。
+- Facebookは`social_account_pages.external_page_id`で照合し、同様に自分を除外する。それ以外は`external_account_id`で照合する。
+- 戻り値はJSON版と同じ`{ slug, identifier }`または`null`（旧実装は文字列を返し、ログが`slug=undefined`になっていた）。
+
+### OAuth開始URLの`?slug=`
+- `/oauth/x/authorize`・`/oauth/{threads,instagram,linkedin,facebook}/start`は、`?slug=`がある場合のみ、ログイン中顧客のslugまたはidと一致したときに認可へ進む（`middleware/oauthSlugGuard.js`）。不一致は403で「このリンクは別の契約用です。対象の契約でログインし直してください。」を表示する。`?slug=`なしの通常導線は従来どおり。
+
+### Xトークンリフレッシュ（`scripts/refreshXTokens.js`、15分ごとのcron）
+- ネットワークエラー（fetch例外、`err.cause.code`がEAI_AGAIN等）は1回の実行内で5秒おき最大3回試行する。HTTP応答エラーには`status`/`body`（先頭200文字、トークン値はマスク）を保持する。
+- HTTP `400`/`401`（invalid_grantか否かを問わず失効の可能性が高いとみなす）のみ即時に「再認可が必要です」メール（再認可リンク付き）を送る。同一の失敗状態では再送しない。
+- それ以外の失敗は顧客単位の連続失敗回数を`data/x-refresh-failures.json`（`X_REFRESH_STATE_PATH`で変更可）に保持し、3回連続（約45分）で1度だけ「一時的に失敗」メール（再認可リンクなし）を送る。成功でカウンタと通知済みフラグをリセットする。
+- 新refresh_tokenはXの応答を受けた直後に保存する。ログ・メールにはcause.code、HTTPステータス、本文先頭200文字を出し、トークン値は出さない。
