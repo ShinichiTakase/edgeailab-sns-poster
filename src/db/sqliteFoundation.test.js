@@ -54,15 +54,15 @@ test("migration is repeatable and checksum remains stable", () => {
   const f = fixture();
   try {
     migrate(f.db, { now: () => LATER });
-    assert.equal(f.db.prepare("SELECT count(*) n FROM schema_migrations").get().n, 5);
+    assert.equal(f.db.prepare("SELECT count(*) n FROM schema_migrations").get().n, 6);
   } finally { f.close(); }
 });
 
 test("last migration rolls back and can be reapplied", () => {
   const f = fixture();
   try {
-    assert.equal(rollbackLast(f.db), "005");
-    assert.equal(f.db.prepare("SELECT count(*) n FROM schema_migrations").get().n, 4);
+    assert.equal(rollbackLast(f.db), "006");
+    assert.equal(f.db.prepare("SELECT count(*) n FROM schema_migrations").get().n, 5);
     migrate(f.db);
     assert.ok(f.db.prepare("SELECT name FROM sqlite_master WHERE name='customers'").get());
   } finally { f.close(); }
