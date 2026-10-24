@@ -38,7 +38,9 @@ router.post("/api/uploads/image", requireAuth, blockExpiredTrialJson, blockViewe
     if (!req.file) {
       return res.status(400).json({ error: "image_required_or_invalid" });
     }
-    res.json({ url: `https://edgeailab.net/uploads/${req.file.filename}` });
+    // 公開URLのホストはAPP_BASE_URLで切り替える（未設定時は従来どおり本番URL。dev環境用）。
+    const base = (process.env.APP_BASE_URL || "https://edgeailab.net").replace(/\/+$/, "");
+    res.json({ url: `${base}/uploads/${req.file.filename}` });
   });
 });
 

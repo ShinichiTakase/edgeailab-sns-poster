@@ -13,7 +13,8 @@ const { getDocsNumber } = require("./generationConfig");
 
 const UPLOAD_DIR = path.join(__dirname, "..", "..", "uploads");
 const VIDEO_RENDER_CONCURRENCY = 2;
-const PUBLIC_UPLOAD_PREFIX = "https://edgeailab.net/uploads/";
+// 公開URLのホストはAPP_BASE_URLで切り替える（未設定時は従来どおり本番URL。dev環境用）。
+const PUBLIC_UPLOAD_PREFIX = `${(process.env.APP_BASE_URL || "https://edgeailab.net").replace(/\/+$/, "")}/uploads/`;
 
 const jobs = new Map();
 
