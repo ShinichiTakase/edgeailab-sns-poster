@@ -6,7 +6,7 @@ x-sns-poster-runtime: &sns-poster-runtime
     - path: /etc/edgeailab/sns-poster-sqlite.env
       required: false
   volumes:
-    - /opt/project/edgeailab.net/sns-poster/data:/app/data
+    - /opt/project/edgeailab/sns-poster/data:/app/data
 
 services:
   sns-poster:

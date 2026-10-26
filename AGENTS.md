@@ -4,7 +4,7 @@
 
 ## 環境と本番操作
 
-- 配置先は `/opt/project/edgeailab.net/sns-poster/AGENTS.md`。このディレクトリは静的サイトとは独立したGitリポジトリ。
+- 配置先は `/opt/project/edgeailab/sns-poster/AGENTS.md`。このディレクトリは静的サイトとは独立したGitリポジトリ。
 - XServer VPSの本番兼開発環境。Stripeは本番利用中。親の `AGENTS.md` とこのファイルを読み、既存の `CLAUDE.md` は参考資料として保持する。
 - 変更前に既存コード・該当仕様書を確認する。仕様変更や機能追加では `docs/外部仕様_*.md`・`docs/内部仕様_*.md` の該当文書も更新する。
 - 読み取り専用調査では変更、package update、migration、build、restart、deploy、ジョブ実行を行わない。

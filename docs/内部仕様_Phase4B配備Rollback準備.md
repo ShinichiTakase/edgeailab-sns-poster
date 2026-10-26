@@ -21,7 +21,7 @@ docker build \
   --build-arg APP_REVISION="$GIT_REVISION" \
   --build-arg APP_VERSION="$RELEASE_TAG" \
   -t "edgeailab/sns-poster:$RELEASE_TAG" \
-  /opt/project/edgeailab.net/sns-poster
+  /opt/project/edgeailab/sns-poster
 ```
 
 Dockerfileはlockfileを使う `npm ci --omit=dev` で依存を固定し、OCI revision/version labelと同名の環境情報を保持する。Compose適用前に全serviceのimage、build無効化、data mount、guarded commandをrender済みconfigで検証する。
