@@ -70,3 +70,30 @@ test("threads url reply is off unless env flag is 1", () => {
   assert.ok(!lc.isThreadsUrlReplyEnabled({}));
   assert.ok(lc.isThreadsUrlReplyEnabled({ THREADS_URL_REPLY_ENABLED: "1" }));
 });
+
+test("threads reply retries code 24 then succeeds", async () => {
+  let n = 0; const sleeps = [];
+  const f = async () => {
+    n += 1;
+    if (n <= 2) return { ok: false, status: 400, json: async () => ({ error: { code: 24, message: "resource does not exist" } }) };
+    return { ok: true, json: async () => ({ id: `c${n}` }) };
+  };
+  await lc.replyOnThreads({ userId: "u1", accessToken: "T" }, "99", "https://a.example/", f, { sleep: async (ms) => { sleeps.push(ms); } });
+  assert.deepStrictEqual(sleeps, [5000, 10000]);
+  assert.strictEqual(n, 4); // 作成2回失敗→3回目で成功、続けて公開1回
+});
+
+test("threads reply gives up after retries and keeps step/detail", async () => {
+  const f = async () => ({ ok: false, status: 400, json: async () => ({ error: { code: 24, type: "OAuthException", message: "resource does not exist", fbtrace_id: "XYZ" } }) });
+  await assert.rejects(
+    lc.replyOnThreads({ userId: "u1", accessToken: "T" }, "99", "https://a.example/", f, { sleep: async () => {} }),
+    (e) => e.code === "graph_24" && /step=create/.test(e.detail) && /trace=XYZ/.test(e.detail) && !/T$/.test(e.detail)
+  );
+});
+
+test("non-retryable error is reported immediately with detail", async () => {
+  let n = 0;
+  const f = async () => { n += 1; return { ok: false, status: 403, json: async () => ({ error: { code: 200, type: "OAuthException", message: "(#200) permission", fbtrace_id: "T1" } }) }; };
+  await assert.rejects(lc.commentOnFacebookVideo({ pageAccessToken: "P" }, "1", "https://a.example/", f), (e) => e.code === "graph_200" && /OAuthException/.test(e.detail) && /trace=T1/.test(e.detail));
+  assert.strictEqual(n, 1);
+});

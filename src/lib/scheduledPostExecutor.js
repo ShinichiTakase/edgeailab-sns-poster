@@ -52,7 +52,8 @@ async function postToPlatform(platform, entry, text, imageUrl, videoUrl, faceboo
     const result = await threadsPoster.postText(account, split.text, lifecycle);
     if (split.url) {
       try { await linkComment.replyOnThreads(account, result.id, split.url); }
-      catch (err) { logger.logError(`[scheduledPostExecutor] threads url reply failed (${err.code || err.message})`); }
+      catch (err) { // 返信に失敗するとURLはどこにも残らないため、手で返信できるように、投稿IDとURLを記録する。
+        logger.logError(`[scheduledPostExecutor] threads url reply failed (${err.code || err.message}) ${err.detail || ""} postId=${result.id} url=${split.url}`); }
     }
     return result;
   }
@@ -72,7 +73,7 @@ async function postToPlatform(platform, entry, text, imageUrl, videoUrl, faceboo
       const reelResult = await require("./facebookReelPoster").postReel({ pageId: page.pageId, pageAccessToken: page.pageAccessToken }, text, videoUrl, {...lifecycle,coverBuffer});
       if (lifecycle.linkUrl) {
         try { await linkComment.commentOnFacebookVideo({ pageAccessToken: page.pageAccessToken }, reelResult.id, lifecycle.linkUrl); }
-        catch (err) { logger.logError(`[scheduledPostExecutor] facebook reel link comment failed (${err.code || err.message})`); }
+        catch (err) { logger.logError(`[scheduledPostExecutor] facebook reel link comment failed (${err.code || err.message}) ${err.detail || ""}`); }
       }
       return reelResult;
     }
@@ -84,7 +85,7 @@ async function postToPlatform(platform, entry, text, imageUrl, videoUrl, faceboo
       const reelResult = await instagramPoster.postReel(igEntry, text, videoUrl, lifecycle);
       if (lifecycle.linkUrl) {
         try { await linkComment.commentOnInstagramMedia({ accessToken: igEntry.accessToken }, reelResult.id, lifecycle.linkUrl); }
-        catch (err) { logger.logError(`[scheduledPostExecutor] instagram reel link comment failed (${err.code || err.message})`); }
+        catch (err) { logger.logError(`[scheduledPostExecutor] instagram reel link comment failed (${err.code || err.message}) ${err.detail || ""}`); }
       }
       return reelResult;
     }

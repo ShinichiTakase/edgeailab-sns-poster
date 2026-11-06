@@ -29,7 +29,13 @@ async function graphPost(fetchImpl, url, options) {
   let json;
   try { json = await response.json(); } catch { throw new Error("link_comment_response_invalid"); }
   if (!response.ok || json.error) {
-    throw Object.assign(new Error("link_comment_api_error"), { code: `graph_${json.error?.code || response.status}` });
+    const e = json.error || {};
+    // 原因調査用に、Graph APIのエラー情報（種類・番号・サブコード・メッセージ・追跡ID）を残す。
+    // トークンや本文は含まれない。メッセージは長さを制限する。
+    throw Object.assign(new Error("link_comment_api_error"), {
+      code: `graph_${e.code || response.status}`,
+      detail: [e.type, e.error_subcode && `sub=${e.error_subcode}`, e.message && String(e.message).slice(0, 200), e.fbtrace_id && `trace=${e.fbtrace_id}`].filter(Boolean).join(" | "),
+    });
   }
   return json;
 }
@@ -63,7 +69,7 @@ function splitUrlFromThreadsText(text) {
   return { text: stripped, url };
 }
 
-async function replyOnThreads({ userId, accessToken }, replyToId, url, fetchImpl = (...a) => fetch(...a)) {
+async function replyOnThreads({ userId, accessToken }, replyToId, url, fetchImpl = (...a) => fetch(...a), options = {}) {
   if (!isValidLinkUrl(url) || !replyToId) return null;
   const createParams = new URLSearchParams({
     access_token: accessToken,
@@ -71,10 +77,24 @@ async function replyOnThreads({ userId, accessToken }, replyToId, url, fetchImpl
     media_type: "TEXT",
     reply_to_id: String(replyToId),
   });
-  const created = await graphPost(fetchImpl, `${THREADS_GRAPH_URL}/${userId}/threads?${createParams}`, {});
+  // 公開直後の投稿は、Threads側で参照できるまで少し時間がかかり、「リソースが存在しない」
+  // （code 24）になることがある。その場合だけ、間隔を空けて数回やり直す。
+  const retryDelaysMs = options.retryDelaysMs || [5000, 10000, 20000];
+  const sleep = options.sleep || ((ms) => new Promise((r) => setTimeout(r, ms)));
+  async function withRetry(step, fn) {
+    for (let attempt = 0; ; attempt++) {
+      try { return await fn(); }
+      catch (err) {
+        if (err.code === "graph_24" && attempt < retryDelaysMs.length) { await sleep(retryDelaysMs[attempt]); continue; }
+        err.detail = `step=${step}${err.detail ? ` | ${err.detail}` : ""}`;
+        throw err;
+      }
+    }
+  }
+  const created = await withRetry("create", () => graphPost(fetchImpl, `${THREADS_GRAPH_URL}/${userId}/threads?${createParams}`, {}));
   if (!created.id) throw new Error("link_comment_response_invalid");
   const publishParams = new URLSearchParams({ creation_id: created.id, access_token: accessToken });
-  return graphPost(fetchImpl, `${THREADS_GRAPH_URL}/${userId}/threads_publish?${publishParams}`, {});
+  return withRetry("publish", () => graphPost(fetchImpl, `${THREADS_GRAPH_URL}/${userId}/threads_publish?${publishParams}`, {}));
 }
 
 // Threadsで「URLを返信へ移す」機能の有効/無効。顧客がthreads_manage_repliesを付与し直す前に
