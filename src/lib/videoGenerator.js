@@ -236,7 +236,7 @@ function drawTitle(ctx, { lines, fontSize, lineHeight, textColor, holdT }) {
   const blockHeight = lines.length * lineHeight;
   const startY = (CAPTION_AREA.top + CAPTION_AREA.bottom) / 2 - blockHeight / 2 + lineHeight / 2;
   lines.forEach((line, idx) => {
-    ctx.fillText(line, 510, startY + idx * lineHeight);
+    fillOutlinedText(ctx, line, 510, startY + idx * lineHeight);
   });
   ctx.restore();
 }
@@ -264,6 +264,18 @@ function drawBackgroundImage(ctx, image, draw) {
   ctx.drawImage(image, draw.dx, draw.dy, draw.drawWidth, draw.drawHeight);
   ctx.fillStyle = "rgba(0, 0, 0, 0.45)";
   ctx.fillRect(0, 0, WIDTH, HEIGHT);
+}
+
+// 背景が透過のため、文字色と逆の色で細い縁取りを付けて、写真や単色背景の上でも読めるようにする。
+function fillOutlinedText(ctx, text, x, y) {
+  const fill = ctx.fillStyle;
+  ctx.save();
+  ctx.lineJoin = "round";
+  ctx.lineWidth = 8;
+  ctx.strokeStyle = fill === "#ffffff" ? "rgba(0, 0, 0, 0.55)" : "rgba(255, 255, 255, 0.7)";
+  ctx.strokeText(text, x, y);
+  ctx.restore();
+  ctx.fillText(text, x, y);
 }
 
 function drawFooter(ctx) {
@@ -296,7 +308,7 @@ function drawTypewriter(ctx, { lines, fontSize, lineHeight, textColor, activeT }
   lines.forEach((line, idx) => {
     if (remaining <= 0) return;
     const shown = line.slice(0, Math.max(0, remaining));
-    ctx.fillText(shown, 510, startY + idx * lineHeight);
+    fillOutlinedText(ctx, shown, 510, startY + idx * lineHeight);
     remaining -= line.length;
   });
   ctx.restore();
@@ -320,7 +332,7 @@ function drawSlideIn(ctx, { lines, fontSize, lineHeight, textColor, activeT }) {
   const blockHeight = lines.length * lineHeight;
   const startY = (CAPTION_AREA.top + CAPTION_AREA.bottom) / 2 - blockHeight / 2 + lineHeight / 2 + offsetY;
   lines.forEach((line, idx) => {
-    ctx.fillText(line, 510, startY + idx * lineHeight);
+    fillOutlinedText(ctx, line, 510, startY + idx * lineHeight);
   });
   ctx.restore();
 }
@@ -340,7 +352,7 @@ function drawEndroll(ctx, { lines, fontSize, lineHeight, textColor, activeT }) {
   ctx.textAlign = "center";
   ctx.textBaseline = "middle";
   lines.forEach((line, idx) => {
-    ctx.fillText(line, 510, y + idx * lineHeight);
+    fillOutlinedText(ctx, line, 510, y + idx * lineHeight);
   });
   ctx.restore();
 }
@@ -473,14 +485,14 @@ async function renderVideo({ captionText, outPath, signal, backgroundImagePath, 
             ctx.fillRect(0, 0, WIDTH, HEIGHT);
           }
 
-          // Opaque panel guarantees contrast even over a bright photograph.
-          ctx.fillStyle = "#111827"; ctx.fillRect(100, CAPTION_AREA.top - 20, 820, CAPTION_AREA.bottom - CAPTION_AREA.top + 40);
+          // 本文エリアの背景は透過。文字色は背景に合わせた textColor（写真は白＋暗い膜、
+          // 単色背景はコントラスト比が高いほうの白/黒）を使い、縁取りで可読性を補う。
           if (frame < HOLD_FRAMES) {
             const holdT = frame / Math.max(1, HOLD_FRAMES - 1);
-            drawTitle(ctx, { ...titleFit, textColor: "#ffffff", holdT });
+            drawTitle(ctx, { ...titleFit, textColor, holdT });
           } else {
             const activeT = Math.min(1, (frame - HOLD_FRAMES) / Math.max(1, ACTIVE_FRAMES - 1));
-            drawCaption(ctx, { lines, fontSize, lineHeight, textColor: "#ffffff", activeT });
+            drawCaption(ctx, { lines, fontSize, lineHeight, textColor, activeT });
           }
           drawFooter(ctx);
           if (frameDirectory && [0, HOLD_FRAMES, Math.floor(TOTAL_FRAMES/2), TOTAL_FRAMES-1].includes(frame)) {
@@ -519,8 +531,8 @@ async function renderVideo({ captionText, outPath, signal, backgroundImagePath, 
 
   return {
     accentColorHex: style.accentColorHex,
-    textColor: "#ffffff",
-    contrastRatio: Number(contrastRatio("#111827", "#ffffff").toFixed(2)),
+    textColor,
+    contrastRatio: ratio,
     animation, durationSeconds: OUTPUT_DURATION_SEC,
     bgmFolder: style.bgmFolder,
     bgmFile: path.basename(bgmFilePath),
