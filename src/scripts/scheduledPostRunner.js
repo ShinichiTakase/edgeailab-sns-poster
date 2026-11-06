@@ -52,7 +52,7 @@ async function runSqliteMode() {
       const entry = (loadStore()[customer.slug] || {})[post.platform === "facebook_reel" ? "facebook" : post.platform];
       if (!entry) throw Object.assign(new Error("not_connected"), { retrySafe: true });
       return postToPlatform(post.platform, entry, post.content, post.image_url, post.video_url,
-        post.facebook_page_id, { logError }, lifecycle);
+        post.facebook_page_id, { logError }, { ...lifecycle, linkUrl: post.link_url || "" });
     },
     effectHandlers: require("../services/sqliteScheduledPostEffects").createSqliteScheduledPostEffects({
       db, repositories: () => runner.repositories, customerStore, scheduleStore, sendScheduleResultEmail,

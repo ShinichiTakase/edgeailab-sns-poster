@@ -162,6 +162,7 @@ async function main() {
             containsUrl: containsUrl(content),
             imageUrl: platform === "instagram" ? text.instagram_image_url : undefined,
             videoUrl: ["instagram", "facebook_reel"].includes(platform) ? text.instagram_video_url : undefined,
+            linkUrl: ["instagram", "facebook_reel"].includes(platform) ? text.link_url || undefined : undefined,
             sourceScheduleId: schedule.id,
             materializationKey: JSON.stringify([schedule.id,todayKeyStr,i,platform]),
             facebookPageId: ["facebook", "facebook_reel"].includes(platform) ? schedule.facebook_page_id || undefined : undefined,

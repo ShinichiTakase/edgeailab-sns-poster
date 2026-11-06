@@ -33,7 +33,8 @@ const ERROR_HTML = `<!doctype html>
 <body><p>エラーが発生しました。担当者にご連絡ください。</p></body></html>`;
 
 const AUTHORIZE_URL = "https://threads.net/oauth/authorize";
-const SCOPE = "threads_basic,threads_content_publish";
+// threads_manage_replies: URLを本文から外して返信（コメント）に書くために必要（docs/内部仕様_リンクコメント.md）。
+const SCOPE = "threads_basic,threads_content_publish,threads_manage_replies";
 
 // requireAuthでログイン中の顧客のみ開始でき、req.customer.id（microCMSの顧客レコードid）を
 // slug（json/client_tokens.jsonのキー）としてstateに紐付ける。Facebook/Instagramと同じ方式。

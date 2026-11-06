@@ -159,7 +159,7 @@ pageAccessToken}]`（Facebookのみaccess_tokenがトップレベルに無く、
 導入されたもの（コード内コメントに具体的に明記）。保存形式に`permissions`フィールドを
 持つのはInstagramのみ。
 
-**Threads**: スコープ`threads_basic,threads_content_publish`。`refresh_token`を
+**Threads**: スコープ`threads_basic,threads_content_publish,threads_manage_replies`。`refresh_token`を
 保存しない（長期トークンの更新は同一access_tokenの再交換フローで行う設計、
 CLAUDE.md記載の`refreshThreadsTokens.js`と整合）。
 

@@ -276,6 +276,7 @@ router.get("/api/schedules/:id/texts", requireAuth, blockViewerRole, blockApprov
         instagramImageUrl: t.instagram_image_url || "",
         instagramVideoUrl: t.instagram_video_url || "",
         sourceExcerpt: t.source_excerpt || "",
+        linkUrl: t.link_url || "",
         createdAt: t.createdAt,
       })),
     });
@@ -291,6 +292,7 @@ function validateTextInput(schedule, body) {
     const key = { x: "xText", threads: "threadsText", facebook: "facebookText", facebook_reel: "instagramText", instagram: "instagramText", linkedin: "linkedinText" }[platform];
     if (!body[key] || !body[key].trim()) return "text_required";
   }
+  if (body.linkUrl != null && body.linkUrl !== "" && !require("../lib/linkComment").isValidLinkUrl(body.linkUrl)) return "link_url_invalid";
   if (platforms.includes("facebook_reel") && !body.instagramVideoUrl) return "reel_video_required";
   if (body.instagramVideoUrl) { try { require("../lib/videoGenerator").validateReelCaption(body.instagramText); } catch (error) { return error.code || "reel_caption_invalid"; } }
   // Instagramは画像投稿（旧仕様の単発編集）・動画投稿（新仕様のリール）のいずれかが必須。
@@ -321,6 +323,11 @@ router.post(
       // 投稿文章一覧での識別しやすさのため、生成元（URLまたは原文の抜粋）を各エントリに
       // 記録する。1回の一括登録は同じ生成元から作られるため、バッチ単位で1つ受け取る。
       const sourceExcerpt = typeof req.body?.sourceExcerpt === "string" ? req.body.sourceExcerpt.slice(0, 200) : "";
+      // コメントに書くURL（バッチ単位）。不正な値は保存せず400で返す。
+      const batchLinkUrl = typeof req.body?.linkUrl === "string" ? req.body.linkUrl.trim() : "";
+      if (batchLinkUrl && !require("../lib/linkComment").isValidLinkUrl(batchLinkUrl)) {
+        return res.status(400).json({ error: "link_url_invalid" });
+      }
       for (const entry of entries) {
         const validationError = validateTextInput(schedule, entry || {});
         if (validationError) {
@@ -358,6 +365,7 @@ router.post(
             instagramImageUrl: entry.instagramImageUrl,
             instagramVideoUrl: entry.instagramVideoUrl,
             sourceExcerpt,
+            linkUrl: batchLinkUrl,
             createdBy: req.user.userId,
             approvalFields,
           });
@@ -411,6 +419,7 @@ router.post("/api/schedules/:id/texts", requireAuth, requireVerified, blockExpir
       instagramImageUrl: body.instagramImageUrl,
       instagramVideoUrl: body.instagramVideoUrl,
       sourceExcerpt: typeof body.sourceExcerpt === "string" ? body.sourceExcerpt.slice(0, 200) : "",
+      linkUrl: typeof body.linkUrl === "string" ? body.linkUrl.trim() : "",
       createdBy: req.user.userId,
       approvalFields: approvalStore.noneApprovalFields(),
     });
@@ -449,6 +458,8 @@ router.patch(
         linkedin_text: body.linkedinText || "",
         instagram_image_url: body.instagramImageUrl || "",
         instagram_video_url: body.instagramVideoUrl || "",
+        // 未指定なら保存済みのURLを変えない（空文字を明示したときだけ消す）。
+        ...(typeof body.linkUrl === "string" ? { link_url: body.linkUrl.trim() } : {}),
       });
       res.json({ ok: true });
     } catch (err) {

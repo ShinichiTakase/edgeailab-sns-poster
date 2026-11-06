@@ -13,7 +13,7 @@ const { getAnthropic } = require("./anthropicClient");
 const BGM_ROOT = path.join(__dirname, "..", "..", "bgm");
 const BGM_FOLDERS = ["warm", "bright", "cyber", "digital", "fun", "intense"];
 const ANIMATIONS = ["typewriter", "endroll", "slidein"];
-const FOOTER_TEXT = "詳細はプロフィールのリンクから";
+const FOOTER_TEXT = "詳細は、コメントのURLをご覧ください";
 
 const WIDTH = 1080;
 const HEIGHT = 1920;
@@ -278,12 +278,14 @@ function fillOutlinedText(ctx, text, x, y) {
   ctx.fillText(text, x, y);
 }
 
-function drawFooter(ctx) {
+function drawFooter(ctx, footerText) {
+  // コメントに書くURLが無い動画では、「コメントのURLをご覧ください」を出さない（空文字で非表示）。
+  if (!footerText) return;
   ctx.save(); ctx.globalAlpha = 1;
   ctx.fillStyle = "#111827"; ctx.fillRect(100, 1430, 820, 120);
   ctx.font = `bold 50px ${FONT_FAMILY}`; ctx.fillStyle = "#ffffff";
   ctx.textAlign = "center"; ctx.textBaseline = "middle";
-  ctx.fillText(FOOTER_TEXT, 510, FOOTER_Y);
+  ctx.fillText(footerText, 510, FOOTER_Y);
   ctx.restore();
 }
 
@@ -370,7 +372,7 @@ const DRAWERS = { typewriter: drawTypewriter, endroll: drawEndroll, slidein: dra
  *   未指定の場合は従来通りAIが選んだアクセントカラーの単色背景になる。
  * @returns {Promise<{accentColorHex: string, textColor: string, contrastRatio: number|null, animation: string, bgmFolder: string, bgmFile: string}>}
  */
-async function renderVideo({ captionText, outPath, signal, backgroundImagePath, animation: animationOverride, style: styleOverride, frameDirectory }) {
+async function renderVideo({ captionText, outPath, signal, backgroundImagePath, animation: animationOverride, style: styleOverride, frameDirectory, footerText = FOOTER_TEXT }) {
   ensureFontRegistered();
   let plan = validateReelCaption(captionText, animationOverride);
   if (!animationOverride) {
@@ -494,7 +496,7 @@ async function renderVideo({ captionText, outPath, signal, backgroundImagePath, 
             const activeT = Math.min(1, (frame - HOLD_FRAMES) / Math.max(1, ACTIVE_FRAMES - 1));
             drawCaption(ctx, { lines, fontSize, lineHeight, textColor, activeT });
           }
-          drawFooter(ctx);
+          drawFooter(ctx, footerText);
           if (frameDirectory && [0, HOLD_FRAMES, Math.floor(TOTAL_FRAMES/2), TOTAL_FRAMES-1].includes(frame)) {
             fs.mkdirSync(frameDirectory, { recursive: true });
             fs.writeFileSync(path.join(frameDirectory, `${animation}-${frame}.png`), canvas.toBuffer("image/png"));

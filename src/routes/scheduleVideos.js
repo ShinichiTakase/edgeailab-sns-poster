@@ -86,7 +86,7 @@ router.post(
         return res.status(400).json({ error: "caption_required" });
       }
       try { require("../lib/videoGenerator").validateReelCaption(caption); } catch(error) { return res.status(400).json({error:error.code}); }
-      const result = await regenerateSingleVideo({ caption, backgroundImageUrl });
+      const result = await regenerateSingleVideo({ caption, backgroundImageUrl, hasLink: req.body?.hasLink === true });
       res.json(result);
     } catch (err) {
       console.error(`[scheduleVideos] regenerate failed id=${req.params.id}:`, err);

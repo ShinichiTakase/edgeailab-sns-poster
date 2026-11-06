@@ -169,6 +169,8 @@ function startVideoGenerationJob({ sourceText, url, backgroundImageUrls }) {
             outPath,
             signal,
             backgroundImagePath: backgroundImagePaths[slot.index] || null,
+            // コメントに書くURLがある（URL指定）ときだけ、動画下部に案内文を出す。
+            footerText: url ? undefined : "",
           });
           console.log(
             `[timing] videoGenerationJobStore slot=${slot.index} startedAtMs=${__slotT0 - __jobT0} ` +
@@ -207,11 +209,11 @@ function startVideoGenerationJob({ sourceText, url, backgroundImageUrls }) {
 }
 
 /** 完了済みの1スロットだけを差し替える（[再作成]ボタン用）。同期的に1本だけレンダリングする。 */
-async function regenerateSingleVideo({ caption, backgroundImageUrl }) {
+async function regenerateSingleVideo({ caption, backgroundImageUrl, hasLink = false }) {
   const filename = `${crypto.randomUUID()}.mp4`;
   const outPath = path.join(UPLOAD_DIR, filename);
   const backgroundImagePath = resolveBackgroundImagePath(backgroundImageUrl);
-  const style = await renderVideo({ captionText: caption, outPath, backgroundImagePath });
+  const style = await renderVideo({ captionText: caption, outPath, backgroundImagePath, footerText: hasLink ? undefined : "" });
   return { url: publicUrlFor(filename), style };
 }
 

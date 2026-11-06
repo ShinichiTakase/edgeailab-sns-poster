@@ -27,6 +27,7 @@ const xPoster = require("./xPoster");
 const facebookPoster = require("./facebookPoster");
 const instagramPoster = require("./instagramPoster");
 const threadsPoster = require("./threadsPoster");
+const linkComment = require("./linkComment");
 const linkedinPoster = require("./linkedinPoster");
 
 function platformKeyFromLabel(value) {
@@ -44,7 +45,16 @@ async function postToPlatform(platform, entry, text, imageUrl, videoUrl, faceboo
     });
   }
   if (platform === "threads") {
-    return threadsPoster.postText({ userId: entry.user_id, accessToken: entry.access_token }, text, lifecycle);
+    const account = { userId: entry.user_id, accessToken: entry.access_token };
+    // URLを本文から外して返信（コメント）に書く。顧客がthreads_manage_repliesを付与し直す前に
+    // 有効にするとURLが消えるため、環境変数THREADS_URL_REPLY_ENABLED=1のときだけ働く。
+    const split = linkComment.isThreadsUrlReplyEnabled() ? linkComment.splitUrlFromThreadsText(text) : { text, url: null };
+    const result = await threadsPoster.postText(account, split.text, lifecycle);
+    if (split.url) {
+      try { await linkComment.replyOnThreads(account, result.id, split.url); }
+      catch (err) { logger.logError(`[scheduledPostExecutor] threads url reply failed (${err.code || err.message})`); }
+    }
+    return result;
   }
   if (platform === "linkedin") {
     return linkedinPoster.postText({ personUrn: entry.user_id, accessToken: entry.access_token }, text, extractFirstUrl(text));
@@ -59,13 +69,25 @@ async function postToPlatform(platform, entry, text, imageUrl, videoUrl, faceboo
       const match = /^https:\/\/edgeailab\.net\/uploads\/([a-zA-Z0-9_-]+)\.mp4$/.exec(videoUrl || "");
       const coverPath = match && path.join(__dirname,"../../uploads",`${match[1]}.cover.jpg`);
       const coverBuffer = coverPath && fs.existsSync(coverPath) ? fs.readFileSync(coverPath) : null;
-      return require("./facebookReelPoster").postReel({ pageId: page.pageId, pageAccessToken: page.pageAccessToken }, text, videoUrl, {...lifecycle,coverBuffer});
+      const reelResult = await require("./facebookReelPoster").postReel({ pageId: page.pageId, pageAccessToken: page.pageAccessToken }, text, videoUrl, {...lifecycle,coverBuffer});
+      if (lifecycle.linkUrl) {
+        try { await linkComment.commentOnFacebookVideo({ pageAccessToken: page.pageAccessToken }, reelResult.id, lifecycle.linkUrl); }
+        catch (err) { logger.logError(`[scheduledPostExecutor] facebook reel link comment failed (${err.code || err.message})`); }
+      }
+      return reelResult;
     }
     return facebookPoster.postText({ pageId: page.pageId, pageAccessToken: page.pageAccessToken }, text, extractFirstUrl(text));
   }
   if (platform === "instagram") {
     const igEntry = { igUserId: entry.user_id, accessToken: entry.access_token };
-    if (videoUrl) return instagramPoster.postReel(igEntry, text, videoUrl, lifecycle);
+    if (videoUrl) {
+      const reelResult = await instagramPoster.postReel(igEntry, text, videoUrl, lifecycle);
+      if (lifecycle.linkUrl) {
+        try { await linkComment.commentOnInstagramMedia({ accessToken: igEntry.accessToken }, reelResult.id, lifecycle.linkUrl); }
+        catch (err) { logger.logError(`[scheduledPostExecutor] instagram reel link comment failed (${err.code || err.message})`); }
+      }
+      return reelResult;
+    }
     return instagramPoster.postImage(igEntry, text, imageUrl, lifecycle);
   }
   throw new Error(`unknown_platform:${platform}`);
@@ -128,7 +150,8 @@ async function attemptScheduledPost(post, customerCache, logger) {
     post.image_url,
     post.video_url,
     post.facebook_page_id || null,
-    logger
+    logger,
+    { linkUrl: post.link_url || "" }
   );
 
   await markScheduledPostStatus(post.id, "done");
