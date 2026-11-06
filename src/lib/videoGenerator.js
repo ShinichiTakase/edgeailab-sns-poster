@@ -53,6 +53,18 @@ function stripEmoji(text) {
   return typeof text === "string" ? text.replace(EMOJI_PATTERN, "") : text;
 }
 
+// AIが生成したキャプションから絵文字を取り除き、取り除いた跡の余分な空白を整える。
+// AIはプロンプトで禁止していても確率的に絵文字を混ぜるため、生成物は「はじく」のでなく
+// 取り除いて使う（はじくと、URL指定の動画生成が全スロット失敗する。2026-11-06、本番で発生）。
+// 人が手で入力した文章は従来どおり validateReelCaption が絵文字を拒否する。
+function stripEmojiFromCaption(text) {
+  if (typeof text !== "string") return text;
+  return stripEmoji(text)
+    .replace(/[ \t]+\n/g, "\n")
+    .replace(/[ \t]{2,}/g, " ")
+    .trim();
+}
+
 // ---------- Claude APIによる配色・BGM判定 ----------
 
 async function pickVideoStyle({ captionText }) {
@@ -570,4 +582,4 @@ class DOMExceptionLike extends Error {
   }
 }
 
-module.exports = { validateReelCaption, renderVideo, pickVideoStyle, pickTextColor, contrastRatio };
+module.exports = { validateReelCaption, renderVideo, pickVideoStyle, pickTextColor, contrastRatio, stripEmojiFromCaption };

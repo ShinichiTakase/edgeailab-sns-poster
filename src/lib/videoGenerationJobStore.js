@@ -5,7 +5,7 @@
 const crypto = require("crypto");
 const fs = require("fs");
 const path = require("path");
-const { renderVideo } = require("./videoGenerator");
+const { renderVideo, stripEmojiFromCaption } = require("./videoGenerator");
 const { generatePostCopyVariations } = require("./postCopyGenerator");
 const { fetchUrlText } = require("./urlTextFetcher");
 const { classifyFetchError, classifyGenerationError } = require("./generationErrors");
@@ -138,7 +138,8 @@ function startVideoGenerationJob({ sourceText, url, backgroundImageUrls }) {
         url,
         count: getDocsNumber(),
       });
-      captions = variations.instagram;
+      // AI生成文の絵文字は取り除いてから使う（残すとvalidateReelCaptionで全スロットが失敗する）。
+      captions = variations.instagram.map(stripEmojiFromCaption);
     } catch (err) {
       console.log(`[timing] videoGenerationJobStore caption-gen FAILED afterMs=${Date.now() - __captionT0}`);
       if (job.status !== "canceled") {
